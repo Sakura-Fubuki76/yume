@@ -12,11 +12,10 @@ object CacheTimestampStore {
             .apply()
     }
 
-    fun allEntries(context: Context): Map<String, Long> {
-        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    fun allEntries(context: Context): Map<String, Long> =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .all
             .mapValues { it.value as Long }
-    }
 
     fun remove(context: Context, key: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

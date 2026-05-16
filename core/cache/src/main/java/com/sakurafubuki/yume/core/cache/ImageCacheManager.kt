@@ -2,12 +2,12 @@ package com.sakurafubuki.yume.core.cache
 
 import android.app.ActivityManager
 import android.content.Context
-import com.sakurafubuki.yume.core.common.Logger
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.disk.DiskCache
 import coil3.disk.directory
 import coil3.memory.MemoryCache
+import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.model.CacheExpiry
 import okio.FileSystem
 
@@ -70,9 +70,8 @@ object ImageCacheManager {
         remoteThumbnailDiskCache = cache
     }
 
-    fun getRemoteThumbnailCacheUsageBytes(): Long {
-        return runCatching { remoteThumbnailDiskCache?.size ?: 0L }.getOrDefault(0L)
-    }
+    fun getRemoteThumbnailCacheUsageBytes(): Long =
+        runCatching { remoteThumbnailDiskCache?.size ?: 0L }.getOrDefault(0L)
 
     fun removeRemoteThumbnailCacheEntry(key: String) {
         runCatching { remoteThumbnailDiskCache?.remove(key) }
