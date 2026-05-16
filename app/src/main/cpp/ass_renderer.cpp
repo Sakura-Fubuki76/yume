@@ -436,8 +436,8 @@ struct AssContext {
         int totalBytes = layerBytes * n;
 
         std::vector<float> instData(n * 11);
-        const float uvSX = maxW > 0 ? 1.f / static_cast<float>(maxW) : 1.f;
-        const float uvSY = maxH > 0 ? 1.f / static_cast<float>(maxH) : 1.f;
+        const float uvSX = texW > 0 ? 1.f / static_cast<float>(texW) : 1.f;
+        const float uvSY = texH > 0 ? 1.f / static_cast<float>(texH) : 1.f;
 
         uint8_t* pboPtr = pboRing.mapWrite(totalBytes);
 
