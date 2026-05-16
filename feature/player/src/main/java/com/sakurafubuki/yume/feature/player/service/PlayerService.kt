@@ -89,7 +89,6 @@ import com.sakurafubuki.yume.feature.player.extensions.subtitleTrackIndex
 import com.sakurafubuki.yume.feature.player.extensions.switchTrack
 import com.sakurafubuki.yume.feature.player.extensions.uriToSubtitleConfiguration
 import com.sakurafubuki.yume.feature.player.extensions.videoZoom
-
 import dagger.hilt.android.AndroidEntryPoint
 import io.github.anilbeesetti.nextlib.media3ext.renderer.subtitleDelayMilliseconds
 import io.github.anilbeesetti.nextlib.media3ext.renderer.subtitleSpeed

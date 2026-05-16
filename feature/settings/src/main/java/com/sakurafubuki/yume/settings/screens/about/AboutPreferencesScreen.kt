@@ -1,7 +1,6 @@
 package com.sakurafubuki.yume.settings.screens.about
 
 import android.content.Context
-import android.os.Build
 import android.widget.Toast
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat

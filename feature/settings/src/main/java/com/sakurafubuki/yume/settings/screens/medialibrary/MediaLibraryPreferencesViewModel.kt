@@ -288,7 +288,6 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
             )
         }
     }
-
 }
 
 private const val CACHE_REFRESH_DEBOUNCE_MS = 300L

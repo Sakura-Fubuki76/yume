@@ -2,7 +2,6 @@ package com.sakurafubuki.yume.feature.player.effect
 
 import android.content.Context
 import android.opengl.GLES30
-import com.sakurafubuki.yume.core.common.Logger
 import androidx.annotation.OptIn
 import androidx.media3.common.util.GlProgram
 import androidx.media3.common.util.Size
@@ -10,6 +9,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
+import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.model.Anime4KRestoreMode
 
 @UnstableApi

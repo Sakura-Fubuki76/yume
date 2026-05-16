@@ -4,7 +4,6 @@ import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
-import com.sakurafubuki.yume.core.common.Logger
 import androidx.core.net.toUri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
@@ -14,6 +13,7 @@ import coil3.SingletonImageLoader
 import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import com.sakurafubuki.yume.core.cache.ImageCacheManager
+import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.common.Utils
 import com.sakurafubuki.yume.core.common.extensions.stripUserInfoFromHttpUrl
 import com.sakurafubuki.yume.core.data.cache.CloudFolderCache

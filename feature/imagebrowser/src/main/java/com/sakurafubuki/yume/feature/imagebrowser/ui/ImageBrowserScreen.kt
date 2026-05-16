@@ -3,7 +3,6 @@ package com.sakurafubuki.yume.feature.imagebrowser.ui
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
-import com.sakurafubuki.yume.core.common.Logger
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
@@ -100,6 +99,7 @@ import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.accompanist.permissions.shouldShowRationale
+import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.common.imagePermissions
 import com.sakurafubuki.yume.core.model.ApplicationPreferences
 import com.sakurafubuki.yume.core.model.Folder

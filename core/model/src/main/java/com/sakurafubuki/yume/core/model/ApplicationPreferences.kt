@@ -45,7 +45,7 @@ data class ApplicationPreferences(
     val imageBrowserThumbnailSizePx: Int = DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX,
     val imageBrowserPreloadRange: Int = DEFAULT_IMAGE_BROWSER_PRELOAD_RANGE,
     val imageBrowserPreloadPageCount: Int = DEFAULT_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
-    val imageCacheExpiry: CacheExpiry = CacheExpiry.NEVER
+    val imageCacheExpiry: CacheExpiry = CacheExpiry.NEVER,
 ) {
 
     companion object {

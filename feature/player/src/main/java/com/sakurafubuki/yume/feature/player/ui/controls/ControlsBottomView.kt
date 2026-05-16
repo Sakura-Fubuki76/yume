@@ -452,7 +452,7 @@ private fun SimpleSlider(
                             }
                         } else {
                             Modifier
-                        }
+                        },
                     ),
             ) {
                 if (valueRange.endInclusive > 0f) {

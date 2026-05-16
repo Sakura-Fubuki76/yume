@@ -992,12 +992,10 @@ class MkvKeyframeExtractor(
     private fun parseCodecPrivate(
         mime: String,
         data: ByteArray,
-    ): Mp4KeyframeExtractor.CodecConfig? {
-        return when (mime) {
-            "video/avc" -> parseAvcC(data)
-            "video/hevc" -> parseHvcC(data)
-            else -> Mp4KeyframeExtractor.CodecConfig(mime, 4, emptyList())
-        }
+    ): Mp4KeyframeExtractor.CodecConfig? = when (mime) {
+        "video/avc" -> parseAvcC(data)
+        "video/hevc" -> parseHvcC(data)
+        else -> Mp4KeyframeExtractor.CodecConfig(mime, 4, emptyList())
     }
 
     private fun parseAvcC(data: ByteArray): Mp4KeyframeExtractor.CodecConfig? {

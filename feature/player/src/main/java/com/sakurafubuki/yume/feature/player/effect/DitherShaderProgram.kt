@@ -1,11 +1,11 @@
 package com.sakurafubuki.yume.feature.player.effect
 
 import android.opengl.GLES30
-import com.sakurafubuki.yume.core.common.Logger
 import androidx.media3.common.util.GlProgram
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
+import com.sakurafubuki.yume.core.common.Logger
 
 @UnstableApi
 class DitherShaderProgram(

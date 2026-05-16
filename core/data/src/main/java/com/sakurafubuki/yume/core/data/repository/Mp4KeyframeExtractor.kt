@@ -8,6 +8,8 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
+import com.sakurafubuki.yume.core.common.Logger
+import com.sakurafubuki.yume.core.model.ChapterEntry
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
@@ -19,8 +21,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import com.sakurafubuki.yume.core.common.Logger
-import com.sakurafubuki.yume.core.model.ChapterEntry
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -125,7 +125,7 @@ class Mp4KeyframeExtractor(
         log { "CHPL: chpl at off=$chplOff size=$chplSize" }
 
         if (chplOff + 17 > chplEnd) {
-            log { "CHPL: too small (chplEnd=${chplEnd})" }
+            log { "CHPL: too small (chplEnd=$chplEnd)" }
             return emptyList()
         }
 
