@@ -19,11 +19,11 @@ fun AssSubtitleView(
         modifier = modifier,
         factory = { context ->
             SurfaceView(context).apply {
-
                 holder.setFormat(PixelFormat.TRANSLUCENT)
                 setZOrderMediaOverlay(true)
 
                 holder.addCallback(object : SurfaceHolder.Callback {
+
                     override fun surfaceCreated(holder: SurfaceHolder) {
                         AssRenderer.nativeSetSurface(state.handle, holder.surface)
                     }
@@ -32,10 +32,10 @@ fun AssSubtitleView(
                         holder: SurfaceHolder,
                         format: Int,
                         width: Int,
-                        height: Int
+                        height: Int,
                     ) {
-
                         AssRenderer.nativeSetSurface(state.handle, holder.surface)
+                        AssRenderer.nativeSetFrameSize(state.handle, width, height)
                     }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {

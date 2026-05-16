@@ -3,7 +3,7 @@ project("yuv_to_bitmap")
 
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
 
-set(PREBUILT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/prebuilts/${ANDROID_ABI})
+set(PREBUILT_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libass/prebuilts-${ANDROID_ABI}/${ANDROID_ABI})
 
 add_subdirectory(libyuv)
 
@@ -21,7 +21,7 @@ target_link_libraries(soundtouchjni SoundTouchDLL android log)
 
 add_library(ass_jni SHARED ass_renderer.cpp)
 
-target_include_directories(ass_jni PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/prebuilts/include)
+target_include_directories(ass_jni PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/libass/prebuilts-${ANDROID_ABI}/include)
 
 add_library(prebuilt_ass STATIC IMPORTED)
 set_target_properties(prebuilt_ass PROPERTIES IMPORTED_LOCATION ${PREBUILT_DIR}/libass.a)
@@ -52,6 +52,7 @@ target_link_libraries(ass_jni
     prebuilt_fontconfig
     prebuilt_xml2
     prebuilt_unibreak
+    GLESv3 EGL
     android log jnigraphics z m
 )
 
