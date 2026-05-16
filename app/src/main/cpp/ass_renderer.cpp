@@ -75,7 +75,8 @@ out vec4 frag_color;
 
 void main() {
     float mask = texture(u_tex, vec3(v_uv, v_layer)).r;
-    frag_color = vec4(v_color.rgb, v_color.a * mask);
+    float alpha = v_color.a * mask;
+    frag_color = vec4(v_color.rgb * alpha, alpha);
 }
 )";
 
@@ -496,7 +497,7 @@ struct AssContext {
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
         glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
         glUseProgram(glProgram);
         glUniform2f(locRes, static_cast<float>(width), static_cast<float>(height));
@@ -622,8 +623,10 @@ Java_com_sakurafubuki_yume_feature_player_ass_AssRenderer_nativeSetFrameSize(
     std::lock_guard<std::mutex> lock(ctx->renderMutex);
     ctx->width = width; ctx->height = height;
 #if HAS_LIBASS
-    if (ctx->renderer && width > 0 && height > 0)
+    if (ctx->renderer && width > 0 && height > 0) {
         ass_set_frame_size(ctx->renderer, width, height);
+        ass_set_storage_size(ctx->renderer, width, height);
+    }
 #endif
 }
 
