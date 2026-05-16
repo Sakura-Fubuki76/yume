@@ -22,23 +22,8 @@ object DatabaseModule {
         context = context,
         klass = MediaDatabase::class.java,
         name = MediaDatabase.DATABASE_NAME,
-    ).apply {
-        addMigrations(
-            MediaDatabase.MIGRATION_1_2,
-            MediaDatabase.MIGRATION_2_3,
-            MediaDatabase.MIGRATION_3_4,
-            MediaDatabase.MIGRATION_4_5,
-            MediaDatabase.MIGRATION_5_6,
-            MediaDatabase.MIGRATION_6_7,
-            MediaDatabase.MIGRATION_7_8,
-            MediaDatabase.MIGRATION_8_9,
-            MediaDatabase.MIGRATION_9_10,
-            MediaDatabase.MIGRATION_10_11,
-            MediaDatabase.MIGRATION_11_12,
-            MediaDatabase.MIGRATION_12_13,
-            MediaDatabase.MIGRATION_13_14,
-        )
-        fallbackToDestructiveMigration(false)
-        setJournalMode(RoomDatabase.JournalMode.AUTOMATIC)
-    }.build()
+    ).addMigrations(*MediaDatabase.ALL_MIGRATIONS)
+        .fallbackToDestructiveMigration(false)
+        .setJournalMode(RoomDatabase.JournalMode.AUTOMATIC)
+        .build()
 }
