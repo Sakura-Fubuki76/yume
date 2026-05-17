@@ -2,17 +2,17 @@ package com.sakurafubuki.yume.core.common.extensions
 
 internal val EP_REGEX = Regex(
     """[\[【\s](\d{1,4})(?:v\d+)?[]】\s]|""" +
-    """[-–~]\s*(\d{1,4})(?:v\d+)?(?:\s|$)|""" +
-    """[eE][pP]?\s*(\d{1,4})(?:\s|$)|""" +
-    """[#＃](\d{1,4})(?:\s|$)"""
+        """[-–~]\s*(\d{1,4})(?:v\d+)?(?:\s|$)|""" +
+        """[eE][pP]?\s*(\d{1,4})(?:\s|$)|""" +
+        """[#＃](\d{1,4})(?:\s|$)""",
 )
 
 internal val TAG_CLEAN_REGEX = Regex(
     """[\[(].*?[])]|""" +
-    """\b\d{3,4}[xp].*?(?:\s|$)|""" +
-    """\b(?:x264|x265|HEVC|AVC|AV1|AAC|FLAC|MP3|opus|vorbis|10bit|8bit|HDR|SDR|SRTx?\d*|WebRip|BDrip|WEB-DL|BDRip|Ma\d+p)\b|""" +
-    """\.\w+$""",
-    setOf(RegexOption.IGNORE_CASE)
+        """\b\d{3,4}[xp].*?(?:\s|$)|""" +
+        """\b(?:x264|x265|HEVC|AVC|AV1|AAC|FLAC|MP3|opus|vorbis|10bit|8bit|HDR|SDR|SRTx?\d*|WebRip|BDrip|WEB-DL|BDRip|Ma\d+p)\b|""" +
+        """\.\w+$""",
+    setOf(RegexOption.IGNORE_CASE),
 )
 
 fun fuzzyMatchNames(videoName: String, subtitleName: String): Boolean {
@@ -38,13 +38,11 @@ internal fun extractEpisode(name: String): Int? {
     return null
 }
 
-internal fun extractTitleTokens(name: String): Set<String> {
-    return name.replace(TAG_CLEAN_REGEX, " ")
-        .replace(Regex("""[～~\-_.,!?+/&|\[\]【】()（）]"""), " ")
-        .replace(Regex("""\s+"""), " ")
-        .trim()
-        .lowercase()
-        .split(" ")
-        .filter { it.length >= 2 }
-        .toSet()
-}
+internal fun extractTitleTokens(name: String): Set<String> = name.replace(TAG_CLEAN_REGEX, " ")
+    .replace(Regex("""[～~\-_.,!?+/&|\[\]【】()（）]"""), " ")
+    .replace(Regex("""\s+"""), " ")
+    .trim()
+    .lowercase()
+    .split(" ")
+    .filter { it.length >= 2 }
+    .toSet()

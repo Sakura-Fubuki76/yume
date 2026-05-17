@@ -1,5 +1,6 @@
 package com.sakurafubuki.yume.feature.player
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -39,7 +40,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import android.net.Uri
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +51,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.Player
@@ -61,6 +62,7 @@ import com.sakurafubuki.yume.core.model.PlayerPreferences
 import com.sakurafubuki.yume.core.model.WebDavServer
 import com.sakurafubuki.yume.core.ui.R as coreUiR
 import com.sakurafubuki.yume.core.ui.extensions.copy
+import com.sakurafubuki.yume.feature.player.ass.AssSubtitleState
 import com.sakurafubuki.yume.feature.player.buttons.NextButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayPauseButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayerButton
@@ -88,7 +90,6 @@ import com.sakurafubuki.yume.feature.player.state.seekToPositionFormated
 import com.sakurafubuki.yume.feature.player.ui.DoubleTapIndicator
 import com.sakurafubuki.yume.feature.player.ui.OverlayShowView
 import com.sakurafubuki.yume.feature.player.ui.OverlayView
-import com.sakurafubuki.yume.feature.player.ass.AssSubtitleState
 import com.sakurafubuki.yume.feature.player.ui.SubtitleConfiguration
 import com.sakurafubuki.yume.feature.player.ui.VerticalProgressView
 import com.sakurafubuki.yume.feature.player.ui.VideoInfoOverlay
@@ -97,7 +98,6 @@ import com.sakurafubuki.yume.feature.player.ui.controls.ControlsTopView
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import androidx.core.net.toUri
 
 val LocalControlsVisibilityState = compositionLocalOf<ControlsVisibilityState?> { null }
 

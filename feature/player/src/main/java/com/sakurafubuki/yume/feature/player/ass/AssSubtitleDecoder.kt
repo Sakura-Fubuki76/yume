@@ -5,10 +5,9 @@ import androidx.media3.common.Format
 import androidx.media3.common.text.Cue
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.text.SubtitleDecoderFactory
-import androidx.media3.extractor.text.Subtitle
 import androidx.media3.extractor.text.SimpleSubtitleDecoder
+import androidx.media3.extractor.text.Subtitle
 import androidx.media3.extractor.text.SubtitleDecoder
-
 
 @UnstableApi
 class AssSubtitleDecoder(
@@ -44,7 +43,7 @@ class AssSubtitleDecoder(
 
     companion object {
         private val TIMING_REGEX = Regex(
-            """^Dialogue:\s*\d+,\s*(\d+:\d{2}:\d{2}\.\d{2})\s*,\s*(\d+:\d{2}:\d{2}\.\d{2})\s*,"""
+            """^Dialogue:\s*\d+,\s*(\d+:\d{2}:\d{2}\.\d{2})\s*,\s*(\d+:\d{2}:\d{2}\.\d{2})\s*,""",
         )
 
         internal fun parseAssTiming(data: ByteArray, length: Int): Pair<Long, Long> {

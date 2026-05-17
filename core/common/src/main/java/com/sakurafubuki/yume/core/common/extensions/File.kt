@@ -5,7 +5,6 @@ import android.net.Uri
 import android.os.Environment
 import androidx.core.net.toUri
 import java.io.File
-import kotlin.text.RegexOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -80,4 +79,3 @@ fun File.deleteFiles() {
 
 val File.prettyName: String
     get() = this.name.takeIf { this.path != Environment.getExternalStorageDirectory()?.path } ?: "Internal Storage"
-

@@ -60,7 +60,9 @@ import com.sakurafubuki.yume.core.data.repository.MoovIndexCache
 import com.sakurafubuki.yume.core.data.repository.Mp4KeyframeExtractor
 import com.sakurafubuki.yume.core.data.repository.PreferencesRepository
 import com.sakurafubuki.yume.core.data.repository.WebDavServerRepository
+import com.sakurafubuki.yume.core.model.Anime4KAutoDownscalePreMode
 import com.sakurafubuki.yume.core.model.Anime4KRestoreMode
+import com.sakurafubuki.yume.core.model.Anime4KUpscaleMode
 import com.sakurafubuki.yume.core.model.CloudVideoMetadata
 import com.sakurafubuki.yume.core.model.DecoderPriority
 import com.sakurafubuki.yume.core.model.LoopMode
@@ -953,8 +955,11 @@ class PlayerService : MediaSessionService() {
                     path.endsWith(".ass", ignoreCase = true) || path.endsWith(".ssa", ignoreCase = true)
                 }
                 AssSubtitleState.availableAssFilesByMediaId[mediaItem.mediaId] = assUris
-                val bestAssUri = if (bestCandidateUri != null && bestCandidateUri in assUris) bestCandidateUri
-                    else assUris.firstOrNull()
+                val bestAssUri = if (bestCandidateUri != null && bestCandidateUri in assUris) {
+                    bestCandidateUri
+                } else {
+                    assUris.firstOrNull()
+                }
                 if (bestAssUri != null && shouldAutoSelect) {
                     AssSubtitleState.autoSelectAssByMediaId[mediaItem.mediaId] = bestAssUri
                 }

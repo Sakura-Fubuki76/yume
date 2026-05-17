@@ -16,10 +16,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaController
 import com.sakurafubuki.yume.feature.player.extensions.copy
-import com.sakurafubuki.yume.feature.player.service.getSubtitleDelayMilliseconds
-import com.sakurafubuki.yume.feature.player.service.getSubtitleSpeed
 import com.sakurafubuki.yume.feature.player.extensions.subtitleDelayMilliseconds
 import com.sakurafubuki.yume.feature.player.extensions.subtitleSpeed
+import com.sakurafubuki.yume.feature.player.service.getSubtitleDelayMilliseconds
+import com.sakurafubuki.yume.feature.player.service.getSubtitleSpeed
 import com.sakurafubuki.yume.feature.player.service.setSubtitleDelayMilliseconds
 import com.sakurafubuki.yume.feature.player.service.setSubtitleSpeed
 import kotlinx.coroutines.CoroutineScope
