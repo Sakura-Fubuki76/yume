@@ -59,6 +59,7 @@ class PlayerPreferencesViewModel @Inject constructor(
             PlayerPreferencesUiEvent.ToggleDeband -> toggleDeband()
             PlayerPreferencesUiEvent.ToggleAnime4KClampHighlights -> toggleAnime4KClampHighlights()
             PlayerPreferencesUiEvent.ToggleDither -> toggleDither()
+            PlayerPreferencesUiEvent.ToggleRefreshRateMatch -> toggleRefreshRateMatch()
             is PlayerPreferencesUiEvent.MoveEffectUp -> moveEffect(event.index, -1)
             is PlayerPreferencesUiEvent.MoveEffectDown -> moveEffect(event.index, 1)
         }
@@ -200,6 +201,14 @@ class PlayerPreferencesViewModel @Inject constructor(
         }
     }
 
+    private fun toggleRefreshRateMatch() {
+        viewModelScope.launch {
+            preferencesRepository.updatePlayerPreferences {
+                it.copy(enableRefreshRateMatch = !it.enableRefreshRateMatch)
+            }
+        }
+    }
+
     private fun toggleDither() {
         viewModelScope.launch {
             preferencesRepository.updatePlayerPreferences {
@@ -256,6 +265,7 @@ sealed interface PlayerPreferencesUiEvent {
     data class UpdateAnime4KAutoDownscalePreMode(val mode: Anime4KAutoDownscalePreMode) : PlayerPreferencesUiEvent
     data object ToggleDeband : PlayerPreferencesUiEvent
     data object ToggleAnime4KClampHighlights : PlayerPreferencesUiEvent
+    data object ToggleRefreshRateMatch : PlayerPreferencesUiEvent
     data object ToggleDither : PlayerPreferencesUiEvent
     data class MoveEffectUp(val index: Int) : PlayerPreferencesUiEvent
     data class MoveEffectDown(val index: Int) : PlayerPreferencesUiEvent

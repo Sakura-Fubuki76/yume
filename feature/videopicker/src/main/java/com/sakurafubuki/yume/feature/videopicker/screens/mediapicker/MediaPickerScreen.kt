@@ -298,11 +298,7 @@ internal fun MediaPickerScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
-                                imageVector = if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
-                                    NextIcons.Cloud
-                                } else {
-                                    NextIcons.Folder
-                                },
+                                imageVector = NextIcons.Sync,
                                 contentDescription = if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
                                     stringResource(R.string.switch_to_local_mode)
                                 } else {

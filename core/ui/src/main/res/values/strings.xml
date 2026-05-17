@@ -32,7 +32,7 @@
     <string name="player_controls_play_pause">Player play pause</string>
     <string name="player_controls_previous">Player previous</string>
     <string name="player_controls_progress">Player progress bar</string>
-    <string name="player_description">Player appearance, playback controls</string>
+    <string name="player_description">Player appearance, playback controls, effect</string>
     <string name="player_name">Player</string>
     <string name="gestures_name">Gestures</string>
     <string name="gestures_description">Configure player touch gestures</string>
@@ -71,6 +71,8 @@
     <string name="anime4k_clamp_highlights_description">Clamp local highlight overshoot after restore processing</string>
     <string name="dither_title">Dithering</string>
     <string name="dither_description">Apply Bayer dithering during video rendering to mitigate banding</string>
+    <string name="refresh_rate_match_title">Match display refresh rate</string>
+    <string name="refresh_rate_match_description">Switch display refresh rate to match video frame rate (e.g. 24Hz for movies)</string>
     <string name="render_pipeline_title">Render pipeline</string>
     <string name="render_pipeline_empty">No effects active</string>
     <string name="render_pipeline_separator">→</string>

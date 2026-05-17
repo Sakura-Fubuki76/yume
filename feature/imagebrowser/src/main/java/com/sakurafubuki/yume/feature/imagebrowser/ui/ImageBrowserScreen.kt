@@ -363,7 +363,7 @@ private fun ImageBrowserScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Cloud else NextIcons.Folder,
+                            imageVector = NextIcons.Sync,
                             contentDescription = if (uiState.mode == MediaMode.CLOUD) {
                                 stringResource(R.string.switch_to_local_mode)
                             } else {

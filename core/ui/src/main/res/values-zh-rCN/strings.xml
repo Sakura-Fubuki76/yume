@@ -22,7 +22,7 @@
     <string name="player_controls_exit">向上导航</string>
     <string name="player_controls_next">下一个</string>
     <string name="player_controls_play_pause">播放/暂停</string>
-    <string name="player_description">播放器外观、播放控制</string>
+    <string name="player_description">播放器外观、播放控制、效果</string>
     <string name="quick_settings">快捷设置</string>
     <string name="video_quick_settings">视频快捷设置</string>
     <string name="image_quick_settings">图片快捷设置</string>
@@ -57,6 +57,8 @@
     <string name="anime4k_clamp_highlights_description">在 Restore 后限制局部高光过冲</string>
     <string name="dither_title">抖动</string>
     <string name="dither_description">在视频渲染时应用Bayer抖动以减轻色带</string>
+    <string name="refresh_rate_match_title">匹配显示器帧率</string>
+    <string name="refresh_rate_match_description">将显示器刷新率切换至匹配视频帧率（如电影切换至24Hz）</string>
     <string name="render_pipeline_title">渲染流程</string>
     <string name="render_pipeline_empty">无活跃效果</string>
     <string name="render_pipeline_separator">→</string>

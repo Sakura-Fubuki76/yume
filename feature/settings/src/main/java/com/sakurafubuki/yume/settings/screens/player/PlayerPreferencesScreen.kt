@@ -140,7 +140,7 @@ private fun PlayerPreferencesContent(
                 ClickablePreferenceItem(
                     title = stringResource(id = R.string.anime4k_autodownscalepre_title),
                     description = uiState.preferences.anime4KAutoDownscalePreMode.name(),
-                    icon = NextIcons.Image,
+                    icon = NextIcons.AspectRatio,
                     onClick = { onEvent(PlayerPreferencesUiEvent.ShowDialog(PlayerPreferenceDialog.Anime4KAutoDownscalePreDialog)) },
                     isFirstItem = true,
                     isLastItem = false,
@@ -148,7 +148,7 @@ private fun PlayerPreferencesContent(
                 ClickablePreferenceItem(
                     title = stringResource(id = R.string.anime4k_upscale_title),
                     description = uiState.preferences.anime4KUpscaleMode.name(),
-                    icon = NextIcons.Image,
+                    icon = NextIcons.HighQuality,
                     onClick = { onEvent(PlayerPreferencesUiEvent.ShowDialog(PlayerPreferenceDialog.Anime4KUpscaleDialog)) },
                     isFirstItem = false,
                     isLastItem = false,
@@ -156,7 +156,7 @@ private fun PlayerPreferencesContent(
                 ClickablePreferenceItem(
                     title = stringResource(id = R.string.anime4k_restore_title),
                     description = uiState.preferences.anime4KRestoreMode.name(),
-                    icon = NextIcons.Image,
+                    icon = NextIcons.AutoFix,
                     onClick = { onEvent(PlayerPreferencesUiEvent.ShowDialog(PlayerPreferenceDialog.Anime4KRestoreDialog)) },
                     isFirstItem = false,
                     isLastItem = false,
@@ -164,7 +164,7 @@ private fun PlayerPreferencesContent(
                 PreferenceSwitch(
                     title = stringResource(id = R.string.deband_title),
                     description = stringResource(id = R.string.deband_description),
-                    icon = NextIcons.Contrast,
+                    icon = NextIcons.Gradient,
                     isChecked = uiState.preferences.enableDeband,
                     onClick = { onEvent(PlayerPreferencesUiEvent.ToggleDeband) },
                     isFirstItem = false,
@@ -182,9 +182,17 @@ private fun PlayerPreferencesContent(
                 PreferenceSwitch(
                     title = stringResource(id = R.string.dither_title),
                     description = stringResource(id = R.string.dither_description),
-                    icon = NextIcons.Appearance,
+                    icon = NextIcons.PhotoFilter,
                     isChecked = uiState.preferences.enableDither,
                     onClick = { onEvent(PlayerPreferencesUiEvent.ToggleDither) },
+                    isLastItem = false,
+                )
+                PreferenceSwitch(
+                    title = stringResource(id = R.string.refresh_rate_match_title),
+                    description = stringResource(id = R.string.refresh_rate_match_description),
+                    icon = NextIcons.Tv,
+                    isChecked = uiState.preferences.enableRefreshRateMatch,
+                    onClick = { onEvent(PlayerPreferencesUiEvent.ToggleRefreshRateMatch) },
                     isLastItem = true,
                 )
             }

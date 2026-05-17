@@ -305,6 +305,25 @@ class PlayerActivity : ComponentActivity() {
             updateKeepScreenOnFlag()
         }
 
+        override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+            super.onVideoSizeChanged(videoSize)
+            if (playerPreferences?.enableRefreshRateMatch != true) return
+            val fps = getVideoFrameRate()
+            if (fps > 0f) {
+                RefreshRateMatcher.onVideoFrameRateDetected(fps, window)
+            }
+        }
+
+        private fun getVideoFrameRate(): Float {
+            val tracks = mediaController?.currentTracks ?: return 0f
+            for (group in tracks.groups) {
+                if (group.type == C.TRACK_TYPE_VIDEO && group.isSelected) {
+                    return group.getTrackFormat(0).frameRate
+                }
+            }
+            return 0f
+        }
+
         override fun onPlaybackStateChanged(playbackState: Int) {
             super.onPlaybackStateChanged(playbackState)
             when (playbackState) {
@@ -338,6 +357,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun finish() {
+        RefreshRateMatcher.onPlaybackStopped(window)
         if (playerApi.shouldReturnResult) {
             val result = playerApi.getResult(
                 isPlaybackFinished = isPlaybackFinished,

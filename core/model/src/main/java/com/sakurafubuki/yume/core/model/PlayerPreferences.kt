@@ -61,6 +61,7 @@ data class PlayerPreferences(
     val enableDeband: Boolean = false,
     val enableAnime4KClampHighlights: Boolean = false,
     val enableDither: Boolean = false,
+    val enableRefreshRateMatch: Boolean = false,
     val videoEffectsOrder: List<VideoEffectType> = listOf(
         VideoEffectType.RESTORE,
         VideoEffectType.AUTODOWNSCALEPRE,

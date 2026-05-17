@@ -97,7 +97,7 @@ private fun AudioPreferencesContent(
                 ClickablePreferenceItem(
                     title = stringResource(id = R.string.audio_output_mode),
                     description = stringResource(id = uiState.preferences.audioOutputMode.labelRes),
-                    icon = NextIcons.Audio,
+                    icon = NextIcons.GraphicEq,
                     onClick = { onEvent(AudioPreferencesUiEvent.ShowDialog(AudioPreferenceDialog.AudioOutputModeDialog)) },
                 )
                 PreferenceSwitch(
