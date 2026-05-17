@@ -14,7 +14,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +40,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.ZeroCornerSize
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
@@ -175,6 +176,7 @@ internal fun MediaPickerScreen(
     var showCloudServerSelectorDialog by rememberSaveable { mutableStateOf(false) }
     var showModeSwitchDialog by rememberSaveable { mutableStateOf(false) }
     var showUrlDialog by rememberSaveable { mutableStateOf(false) }
+    var showStorageMenu by rememberSaveable { mutableStateOf(false) }
     val selectedCloudServer = uiState.webDavServers.firstOrNull { it.id == uiState.selectedCloudServerId }
         ?: uiState.webDavServers.firstOrNull()
     val currentCloudFolder = (uiState.cloudDataState as? DataState.Success)?.value
@@ -283,28 +285,59 @@ internal fun MediaPickerScreen(
                             )
                         }
                     } else {
-                        Box(
-                            modifier = Modifier
-                                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                                .clip(CircleShape)
-                                .combinedClickable(
-                                    onClick = { showModeSwitchDialog = true },
-                                    onLongClick = {
-                                        if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
-                                            showCloudServerSelectorDialog = true
-                                        }
+                        Box {
+                            IconButton(onClick = { showStorageMenu = true }) {
+                                Icon(
+                                    imageVector = if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) NextIcons.Cloud else NextIcons.Folder,
+                                    contentDescription = stringResource(R.string.switch_mode),
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showStorageMenu,
+                                onDismissRequest = { showStorageMenu = false },
+                                shape = MaterialTheme.shapes.medium,
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
+                                                stringResource(R.string.switch_to_local_mode)
+                                            } else {
+                                                stringResource(R.string.switch_to_cloud_mode)
+                                            },
+                                        )
                                     },
-                                ),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = NextIcons.Sync,
-                                contentDescription = if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
-                                    stringResource(R.string.switch_to_local_mode)
-                                } else {
-                                    stringResource(R.string.switch_to_cloud_mode)
-                                },
-                            )
+                                    onClick = {
+                                        showStorageMenu = false
+                                        showModeSwitchDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
+                                                NextIcons.Folder
+                                            } else {
+                                                NextIcons.Cloud
+                                            },
+                                            contentDescription = null,
+                                        )
+                                    },
+                                )
+                                if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.select_webdav_storage)) },
+                                        onClick = {
+                                            showStorageMenu = false
+                                            showCloudServerSelectorDialog = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = NextIcons.Settings,
+                                                contentDescription = null,
+                                            )
+                                        },
+                                    )
+                                }
+                            }
                         }
                         IconButton(onClick = onSearchClick) {
                             Icon(

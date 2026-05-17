@@ -241,12 +241,7 @@ fun AboutApp(
 
 private fun Context.appVersion(): String {
     val packageInfo = packageManager.getPackageInfo(packageName, 0)
-
-    @Suppress("DEPRECATION")
-    val versionCode =
-        packageInfo.longVersionCode
-
-    return "${packageInfo.versionName} ($versionCode)"
+    return packageInfo.versionName ?: ""
 }
 
 internal fun UriHandler.openUriOrShowToast(uri: String, context: Context) {

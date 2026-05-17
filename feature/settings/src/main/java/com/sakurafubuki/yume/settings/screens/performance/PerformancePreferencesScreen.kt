@@ -244,7 +244,7 @@ private fun PerformancePreferencesContent(
                 PreferenceSlider(
                     title = streamingMinBufferTitle,
                     description = stringResource(R.string.buffer_ms_value, uiState.streamingMinBufferMs),
-                    icon = NextIcons.Cloud,
+                    icon = NextIcons.Fast,
                     value = uiState.streamingMinBufferMs.toFloat(),
                     valueRange = ApplicationPreferences.MIN_STREAMING_MIN_BUFFER_MS.toFloat()..ApplicationPreferences.MAX_STREAMING_MIN_BUFFER_MS.toFloat(),
                     onValueChange = { onEvent(MediaLibraryPreferencesUiEvent.UpdateStreamingMinBufferMs(it.toInt())) },
@@ -265,7 +265,7 @@ private fun PerformancePreferencesContent(
                 PreferenceSlider(
                     title = streamingMaxBufferTitle,
                     description = stringResource(R.string.buffer_ms_value, uiState.streamingMaxBufferMs),
-                    icon = NextIcons.Cloud,
+                    icon = NextIcons.GraphicEq,
                     value = uiState.streamingMaxBufferMs.toFloat(),
                     valueRange = ApplicationPreferences.MIN_STREAMING_MAX_BUFFER_MS.toFloat()..ApplicationPreferences.MAX_STREAMING_MAX_BUFFER_MS.toFloat(),
                     onValueChange = { onEvent(MediaLibraryPreferencesUiEvent.UpdateStreamingMaxBufferMs(it.toInt())) },
@@ -286,7 +286,7 @@ private fun PerformancePreferencesContent(
                 PreferenceSlider(
                     title = streamingBufferForPlaybackTitle,
                     description = stringResource(R.string.buffer_ms_value, uiState.streamingBufferForPlaybackMs),
-                    icon = NextIcons.Cloud,
+                    icon = NextIcons.Play,
                     value = uiState.streamingBufferForPlaybackMs.toFloat(),
                     valueRange = ApplicationPreferences.MIN_STREAMING_BUFFER_FOR_PLAYBACK_MS.toFloat()..ApplicationPreferences.MAX_STREAMING_BUFFER_FOR_PLAYBACK_MS.toFloat(),
                     onValueChange = { onEvent(MediaLibraryPreferencesUiEvent.UpdateStreamingBufferForPlaybackMs(it.toInt())) },
@@ -309,7 +309,7 @@ private fun PerformancePreferencesContent(
                 PreferenceSlider(
                     title = streamingBufferAfterRebufferTitle,
                     description = stringResource(R.string.buffer_ms_value, uiState.streamingBufferForPlaybackAfterRebufferMs),
-                    icon = NextIcons.Cloud,
+                    icon = NextIcons.Resume,
                     value = uiState.streamingBufferForPlaybackAfterRebufferMs.toFloat(),
                     valueRange = ApplicationPreferences.MIN_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS.toFloat()..ApplicationPreferences.MAX_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS.toFloat(),
                     onValueChange = {

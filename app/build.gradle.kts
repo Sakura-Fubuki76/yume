@@ -18,8 +18,8 @@ android {
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         applicationId = "com.sakurafubuki.yume"
-        versionCode = 2
-        versionName = "1.0.0-alpha01"
+        versionCode = libs.versions.app.version.code.get().toInt()
+        versionName = libs.versions.app.version.name.get()
     }
 
     buildFeatures {
