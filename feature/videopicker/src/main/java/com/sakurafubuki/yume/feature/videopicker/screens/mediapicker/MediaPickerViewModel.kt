@@ -12,6 +12,7 @@ import com.sakurafubuki.yume.core.common.extensions.prettyName
 import com.sakurafubuki.yume.core.common.extensions.stripUserInfoFromHttpUrl
 import com.sakurafubuki.yume.core.data.cache.CloudDirectoryItemCache
 import com.sakurafubuki.yume.core.data.cache.CloudFolderCache
+import com.sakurafubuki.yume.core.data.openlist.FsSearchItem
 import com.sakurafubuki.yume.core.data.openlist.OpenListApi
 import com.sakurafubuki.yume.core.data.openlist.toApiPath
 import com.sakurafubuki.yume.core.data.openlist.toWebDavMediaItem
@@ -31,12 +32,12 @@ import com.sakurafubuki.yume.core.model.CloudFolderMetadata
 import com.sakurafubuki.yume.core.model.CloudVideoMetadata
 import com.sakurafubuki.yume.core.model.Folder
 import com.sakurafubuki.yume.core.model.MediaMode
+import com.sakurafubuki.yume.core.model.MediaViewMode
 import com.sakurafubuki.yume.core.model.Sort
 import com.sakurafubuki.yume.core.model.Video
+import com.sakurafubuki.yume.core.model.WebDavMediaItem
 import com.sakurafubuki.yume.core.model.WebDavServer
 import com.sakurafubuki.yume.core.ui.base.DataState
-import com.sakurafubuki.yume.feature.videopicker.navigation.CloudPathArgs
-import com.sakurafubuki.yume.feature.videopicker.navigation.FolderArgs
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
 import javax.inject.Inject
@@ -44,6 +45,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -53,7 +57,7 @@ import kotlinx.coroutines.withContext
 
 @HiltViewModel
 class MediaPickerViewModel @Inject constructor(
-    getSortedMediaUseCase: GetSortedMediaUseCase,
+    private val getSortedMediaUseCase: GetSortedMediaUseCase,
     savedStateHandle: SavedStateHandle,
     private val mediaService: MediaService,
     private val preferencesRepository: PreferencesRepository,
@@ -73,13 +77,11 @@ class MediaPickerViewModel @Inject constructor(
 
     private val modeStateHandle = savedStateHandle
 
-    private val folderArgs = FolderArgs(savedStateHandle)
-    private val cloudPathArgs = CloudPathArgs(savedStateHandle)
-
-    val folderPath = folderArgs.folderId
-    private val initialCloudPath = normalizePath(cloudPathArgs.cloudPath.orEmpty())
-    private val initialCloudServerId = cloudPathArgs.cloudServerId
+    private val initialFolderPath: String? = null
+    private val initialCloudPath = "/"
+    private val initialCloudServerId: Int? = null
     private val initialCloudServerIds = modeStateHandle.get<ArrayList<Int>>(CLOUD_SERVER_IDS_KEY)?.toSet()
+    private var localMediaJob: Job? = null
     private var cloudLoadJob: Job? = null
     private var cloudAuxWorkJob: Job? = null
     private var cloudCachedRefreshJob: Job? = null
@@ -95,7 +97,8 @@ class MediaPickerViewModel @Inject constructor(
 
     private val uiStateInternal = MutableStateFlow(
         MediaPickerUiState(
-            folderName = folderPath?.let { File(folderPath).prettyName },
+            folderName = initialFolderPath?.let { File(it).prettyName },
+            folderPath = initialFolderPath,
             preferences = preferencesRepository.applicationPreferences.value,
             mode = preferencesRepository.applicationPreferences.value.lastMediaMode,
             selectedCloudServerIds = initialCloudServerIds
@@ -103,28 +106,27 @@ class MediaPickerViewModel @Inject constructor(
                     initialCloudServerId?.let(::setOf) ?: emptySet()
                 },
             selectedCloudServerId = initialCloudServerId,
-            cloudPath = if (cloudPathArgs.cloudPath.isNullOrBlank()) "/" else initialCloudPath,
+            cloudPath = initialCloudPath,
         ),
     )
     val uiState = uiStateInternal.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            getSortedMediaUseCase.invoke(folderPath).collect {
-                uiStateInternal.update { currentState ->
-                    currentState.copy(
-                        mediaDataState = DataState.Success(it),
-                    )
-                }
-            }
-        }
+        observeLocalMedia(initialFolderPath)
 
         viewModelScope.launch {
-            preferencesRepository.applicationPreferences.collect {
+            preferencesRepository.applicationPreferences.collect { preferences ->
+                val previousPreferences = uiStateInternal.value.preferences
                 uiStateInternal.update { currentState ->
                     currentState.copy(
-                        preferences = it,
+                        preferences = preferences,
                     )
+                }
+                if (
+                    uiStateInternal.value.mode == MediaMode.CLOUD &&
+                    previousPreferences.hasDifferentCloudDisplayShape(preferences)
+                ) {
+                    loadCloudDirectory()
                 }
             }
         }
@@ -200,12 +202,39 @@ class MediaPickerViewModel @Inject constructor(
             is MediaPickerUiEvent.AddToSync -> addToMediaInfoSynchronizer(event.uri)
             is MediaPickerUiEvent.UpdateMenu -> updateMenu(event.preferences)
             MediaPickerUiEvent.ToggleMode -> toggleMode()
+            is MediaPickerUiEvent.OpenLocalFolder -> openLocalFolder(event.folderPath)
             is MediaPickerUiEvent.SelectCloudServer -> selectCloudServer(event.serverId)
             is MediaPickerUiEvent.ToggleCloudServerSelection -> toggleCloudServerSelection(event.serverId)
             is MediaPickerUiEvent.OpenCloudFolder -> openCloudFolder(event.path)
             is MediaPickerUiEvent.PreloadCloudPath -> preloadCloudPath(event.path)
             MediaPickerUiEvent.NavigateCloudUp -> navigateCloudUp()
             MediaPickerUiEvent.RefreshCloud -> refreshCloud()
+        }
+    }
+
+    private fun openLocalFolder(folderPath: String?) {
+        val targetFolderPath = folderPath?.ifBlank { null }
+        if (uiStateInternal.value.folderPath == targetFolderPath) return
+        observeLocalMedia(targetFolderPath)
+    }
+
+    private fun observeLocalMedia(folderPath: String?) {
+        localMediaJob?.cancel()
+        uiStateInternal.update {
+            it.copy(
+                folderName = folderPath?.let { path -> File(path).prettyName },
+                folderPath = folderPath,
+                mediaDataState = DataState.Loading,
+            )
+        }
+        localMediaJob = viewModelScope.launch {
+            getSortedMediaUseCase.invoke(folderPath).collect { folder ->
+                uiStateInternal.update { currentState ->
+                    currentState.copy(
+                        mediaDataState = DataState.Success(folder),
+                    )
+                }
+            }
         }
     }
 
@@ -424,7 +453,13 @@ class MediaPickerViewModel @Inject constructor(
                         rootCachedMetadata = rootCachedMetadata,
                     )
                 }
-                rawCloudFolder.value = immediateFolder
+                val immediateDisplayFolder = resolveCloudFolderForViewMode(
+                    folder = immediateFolder,
+                    preferences = preferences,
+                )
+                if (shouldApplyCloudDisplayFolder(preferences, immediateFolder, immediateDisplayFolder)) {
+                    rawCloudFolder.value = immediateDisplayFolder
+                }
                 uiStateInternal.update {
                     it.copy(
                         selectedCloudServerId = server.id,
@@ -442,7 +477,7 @@ class MediaPickerViewModel @Inject constructor(
                     items = cachedItems,
                 )
             } else {
-                val cachedFolder = if (!refreshing) {
+                val cachedFolder = if (!refreshing && preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
                     withContext(Dispatchers.IO) { cloudFolderCache.get(server.id, path, "video") }
                 } else {
                     null
@@ -483,10 +518,20 @@ class MediaPickerViewModel @Inject constructor(
                             folderMetadataMap = folderMetadataMap,
                         )
                     }
-                    val displayFolder = resolveCloudVideoFolders(
+                    val resolvedDisplayFolder = buildIndexedCloudFolder(
+                        server = server,
+                        path = path,
+                        preferences = preferences,
+                        refreshing = refreshing,
+                    ) ?: resolveCloudFolderForViewMode(
                         folder = rootFolder,
                         preferences = preferences,
                     )
+                    val displayFolder = if (shouldApplyCloudDisplayFolder(preferences, rootFolder, resolvedDisplayFolder)) {
+                        resolvedDisplayFolder
+                    } else {
+                        rootFolder
+                    }
                     saveFolderMetadataPreserving(
                         serverId = server.id,
                         folderPath = normalizePath(path),
@@ -503,7 +548,7 @@ class MediaPickerViewModel @Inject constructor(
                         ),
                     )
                     viewModelScope.launch(Dispatchers.IO) {
-                        cloudFolderCache.put(server.id, normalizePath(path), displayFolder, "video")
+                        cloudFolderCache.put(server.id, normalizePath(path), rootFolder, "video")
                     }
                     rawCloudFolder.value = displayFolder
                     uiStateInternal.update {
@@ -564,7 +609,16 @@ class MediaPickerViewModel @Inject constructor(
         val requestToken = ++cloudLoadRequestToken
 
         cloudLoadJob = viewModelScope.launch {
-            val folder = buildCloudStorageRoot(selectedServers, state.preferences)
+            val preferences = state.preferences
+            val folder = if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
+                buildCloudStorageRoot(selectedServers, preferences)
+            } else {
+                buildIndexedMultiCloudRoot(
+                    selectedServers = selectedServers,
+                    preferences = preferences,
+                    refreshing = refreshing,
+                ) ?: buildCloudStorageRoot(selectedServers, preferences)
+            }
             rawCloudFolder.value = folder
             uiStateInternal.update {
                 it.copy(
@@ -573,12 +627,16 @@ class MediaPickerViewModel @Inject constructor(
                     cloudRefreshing = refreshing,
                 )
             }
-            refreshCloudStorageRootSummaries(
-                requestToken = requestToken,
-                selectedServers = selectedServers,
-                preferences = state.preferences,
-                refreshing = refreshing,
-            )
+            if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
+                refreshCloudStorageRootSummaries(
+                    requestToken = requestToken,
+                    selectedServers = selectedServers,
+                    preferences = preferences,
+                    refreshing = refreshing,
+                )
+            } else {
+                uiStateInternal.update { it.copy(cloudRefreshing = false) }
+            }
         }
     }
 
@@ -611,6 +669,276 @@ class MediaPickerViewModel @Inject constructor(
             folderList = storageFolders.sortedWith(sort.folderComparator()),
             folderCount = storageFolders.size,
         )
+    }
+
+    private suspend fun buildIndexedMultiCloudRoot(
+        selectedServers: List<WebDavServer>,
+        preferences: ApplicationPreferences,
+        refreshing: Boolean,
+    ): Folder? = coroutineScope {
+        val sort = Sort(by = preferences.sortBy, order = preferences.sortOrder)
+        val indexedRoots = selectedServers
+            .map { server ->
+                async(Dispatchers.IO) {
+                    buildIndexedCloudFolder(
+                        server = server,
+                        path = normalizePath(server.basePath),
+                        preferences = preferences,
+                        refreshing = refreshing,
+                    )
+                }
+            }
+            .awaitAll()
+            .filterNotNull()
+        if (indexedRoots.isEmpty()) return@coroutineScope null
+
+        when (preferences.mediaViewMode) {
+            MediaViewMode.FOLDER_TREE -> buildCloudStorageRoot(selectedServers, preferences)
+            MediaViewMode.FOLDERS -> {
+                val folders = indexedRoots
+                    .flatMap { it.folderList }
+                    .sortedWith(sort.folderComparator())
+                if (folders.isEmpty()) return@coroutineScope null
+                Folder.rootFolder.copy(
+                    name = "Yume",
+                    folderList = folders,
+                    mediaList = emptyList(),
+                    folderCount = folders.size,
+                    mediaCount = 0,
+                    cachedMediaSize = folders.sumOf { it.mediaSize },
+                    cachedMediaDuration = folders.sumOf { it.mediaDuration },
+                )
+            }
+            MediaViewMode.VIDEOS -> {
+                val videos = indexedRoots
+                    .flatMap { it.mediaList }
+                    .sortedWith(sort.videoComparator())
+                if (videos.isEmpty()) return@coroutineScope null
+                Folder.rootFolder.copy(
+                    name = "Yume",
+                    folderList = emptyList(),
+                    mediaList = videos,
+                    folderCount = 0,
+                    mediaCount = videos.size,
+                    cachedMediaSize = videos.sumOf { it.size },
+                    cachedMediaDuration = videos.sumOf { it.duration },
+                )
+            }
+        }
+    }
+
+    private suspend fun buildIndexedCloudFolder(
+        server: WebDavServer,
+        path: String,
+        preferences: ApplicationPreferences,
+        refreshing: Boolean,
+    ): Folder? {
+        if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) return null
+        val indexedVideos = searchIndexedCloudVideos(server = server, path = path) ?: return null
+        if (indexedVideos.isEmpty()) return null
+        val sort = Sort(by = preferences.sortBy, order = preferences.sortOrder)
+        val indexedByParent = indexedVideos.groupBy { it.parentPath }
+        val itemsByParent = indexedByParent.mapValues { (parentPath, videos) ->
+            loadIndexedParentVideoItems(
+                server = server,
+                parentPath = parentPath,
+                indexedVideos = videos,
+                refreshing = refreshing,
+            )
+        }
+        val allItems = itemsByParent.values.flatten()
+        val metadataByHref = if (allItems.isEmpty()) {
+            emptyMap()
+        } else {
+            cloudVideoMetadataRepository.getMetadata(
+                serverId = server.id,
+                hrefs = allItems.map { it.href }.distinct(),
+            )
+        }
+        val videosByParent = itemsByParent.mapValues { (parentPath, items) ->
+            items.map { item ->
+                mapCloudVideo(
+                    server = server,
+                    currentPath = parentPath,
+                    item = item,
+                    metadataByHref = metadataByHref,
+                )
+            }.sortedWith(sort.videoComparator())
+        }
+
+        return when (preferences.mediaViewMode) {
+            MediaViewMode.FOLDER_TREE -> null
+            MediaViewMode.FOLDERS -> {
+                val folders = videosByParent.mapNotNull { (parentPath, videos) ->
+                    if (videos.isEmpty()) return@mapNotNull null
+                    Folder(
+                        name = cloudFolderDisplayName(server, parentPath),
+                        path = encodeCloudFolderPath(server.id, parentPath),
+                        dateModified = videos.maxOfOrNull { it.dateModified } ?: 0L,
+                        parentPath = "/",
+                        mediaList = videos,
+                        folderList = emptyList(),
+                        mediaCount = videos.size,
+                        folderCount = 0,
+                        cachedMediaSize = videos.sumOf { it.size },
+                        cachedMediaDuration = videos.sumOf { it.duration },
+                    )
+                }.sortedWith(sort.folderComparator())
+                if (folders.isEmpty()) return null
+                Folder(
+                    name = cloudFolderDisplayName(server, path),
+                    path = encodeCloudFolderPath(server.id, path),
+                    dateModified = folders.maxOfOrNull { it.dateModified } ?: 0L,
+                    folderList = folders,
+                    mediaList = emptyList(),
+                    mediaCount = 0,
+                    folderCount = folders.size,
+                    cachedMediaSize = folders.sumOf { it.mediaSize },
+                    cachedMediaDuration = folders.sumOf { it.mediaDuration },
+                )
+            }
+            MediaViewMode.VIDEOS -> {
+                val videos = videosByParent.values.flatten().sortedWith(sort.videoComparator())
+                if (videos.isEmpty()) return null
+                Folder(
+                    name = cloudFolderDisplayName(server, path),
+                    path = encodeCloudFolderPath(server.id, path),
+                    dateModified = videos.maxOfOrNull { it.dateModified } ?: 0L,
+                    folderList = emptyList(),
+                    mediaList = videos,
+                    mediaCount = videos.size,
+                    folderCount = 0,
+                    cachedMediaSize = videos.sumOf { it.size },
+                    cachedMediaDuration = videos.sumOf { it.duration },
+                )
+            }
+        }
+    }
+
+    private suspend fun searchIndexedCloudVideos(
+        server: WebDavServer,
+        path: String,
+    ): List<CloudIndexedVideo>? {
+        val broadSearch = searchIndexedCloudVideos(
+            server = server,
+            path = path,
+            keywords = "",
+        ) ?: return null
+        if (broadSearch.isNotEmpty()) return broadSearch
+
+        val keyedResults = mutableListOf<CloudIndexedVideo>()
+        val seen = mutableSetOf<String>()
+        for (extension in CLOUD_INDEX_VIDEO_EXTENSIONS) {
+            val extensionResults = searchIndexedCloudVideos(
+                server = server,
+                path = path,
+                keywords = extension,
+            ) ?: return null
+            extensionResults.forEach { indexed ->
+                val key = "${normalizePath(indexed.parentPath)}/${indexed.item.name}"
+                if (seen.add(key)) keyedResults += indexed
+            }
+        }
+        return keyedResults
+    }
+
+    private suspend fun searchIndexedCloudVideos(
+        server: WebDavServer,
+        path: String,
+        keywords: String,
+    ): List<CloudIndexedVideo>? {
+        val apiParentPath = normalizePath(server.toApiPath(path))
+        val files = mutableListOf<CloudIndexedVideo>()
+        var page = 1
+        var total: Int? = null
+        var seenRawItems = 0
+        while (total == null || seenRawItems < total) {
+            val data = openListApi.search(
+                server = server,
+                parent = apiParentPath,
+                keywords = keywords,
+                scope = 2,
+                page = page,
+                perPage = CLOUD_INDEX_SEARCH_PAGE_SIZE,
+            ).getOrElse { throwable ->
+                Logger.d(
+                    CLOUD_SEARCH_LOG_TAG,
+                    "search unavailable server=${server.id} path=$path keywords=$keywords: ${throwable.message}",
+                )
+                return null
+            }
+            total = data.total
+            if (data.total > CLOUD_INDEX_SEARCH_MAX_RESULTS) {
+                Logger.w(
+                    CLOUD_SEARCH_LOG_TAG,
+                    "search result too large server=${server.id} path=$path keywords=$keywords total=${data.total}",
+                )
+                if (keywords.isBlank()) return emptyList()
+                return null
+            }
+            val content = data.content.orEmpty()
+            if (content.isEmpty()) break
+            seenRawItems += content.size
+            files += content
+                .asSequence()
+                .filter { it.isIndexedCloudVideoFile() }
+                .map { item ->
+                    CloudIndexedVideo(
+                        item = item,
+                        parentPath = server.fromApiPath(item.parent),
+                    )
+                }
+                .filter { indexed ->
+                    val normalizedParent = normalizePath(indexed.parentPath)
+                    val normalizedRoot = normalizePath(path)
+                    normalizedRoot == "/" ||
+                        normalizedParent == normalizedRoot ||
+                        normalizedParent.startsWith("$normalizedRoot/")
+                }
+            page += 1
+        }
+        return files
+    }
+
+    private suspend fun loadIndexedParentVideoItems(
+        server: WebDavServer,
+        parentPath: String,
+        indexedVideos: List<CloudIndexedVideo>,
+        refreshing: Boolean,
+    ): List<WebDavMediaItem> {
+        val indexedNames = indexedVideos.map { it.item.name }.toSet()
+        val directoryItems = if (!refreshing) {
+            getCachedCloudDirectoryItems(server.id, parentPath)
+        } else {
+            null
+        } ?: runCatching {
+            listCloudDirectory(
+                server = server,
+                path = parentPath,
+                perPage = CLOUD_INDEX_PARENT_LIST_PAGE_SIZE,
+                refreshing = refreshing,
+            ).first.also { items ->
+                webDavVideoDirectoryCache.put(server.id, parentPath, items)
+                cloudDirectoryItemCache.put(server.id, parentPath, items)
+            }
+        }.getOrNull()
+
+        val listedVideos = directoryItems
+            ?.cloudDisplayVideoFiles()
+            ?.filter { it.name in indexedNames }
+            .orEmpty()
+        val listedNames = listedVideos.map { it.name }.toSet()
+        if (listedNames.size == indexedNames.size) return listedVideos
+
+        val missingSyntheticVideos = indexedVideos
+            .filterNot { it.item.name in listedNames }
+            .map { indexed ->
+                indexed.item.toSyntheticWebDavMediaItem(
+                    server = server,
+                    parentPath = parentPath,
+                )
+            }
+        return listedVideos + missingSyntheticVideos
     }
 
     private suspend fun refreshCloudStorageRootSummaries(
@@ -759,24 +1087,52 @@ class MediaPickerViewModel @Inject constructor(
         return diskItems
     }
 
-    private suspend fun resolveCloudVideoFolders(
+    private suspend fun resolveCloudFolderForViewMode(
         folder: Folder,
         preferences: ApplicationPreferences,
     ): Folder {
-        if (folder.folderList.isEmpty()) {
-            return folder.copy(
-                mediaCount = folder.mediaList.size,
-                folderCount = 0,
-            )
-        }
         val sort = Sort(by = preferences.sortBy, order = preferences.sortOrder)
-        val folders = folder.folderList
-            .sortedWith(sort.folderComparator())
-        return folder.copy(
-            folderList = folders,
-            mediaCount = folder.mediaList.size,
-            folderCount = folders.size,
-        )
+        return when (preferences.mediaViewMode) {
+            MediaViewMode.FOLDER_TREE -> {
+                val folders = folder.folderList.sortedWith(sort.folderComparator())
+                folder.copy(
+                    folderList = folders,
+                    mediaCount = folder.mediaList.size,
+                    folderCount = folders.size,
+                )
+            }
+
+            MediaViewMode.FOLDERS -> {
+                val folders = folder.collectCloudVideoLeafFolders()
+                    .distinctBy { it.path }
+                    .sortedWith(sort.folderComparator())
+                folder.copy(
+                    mediaList = emptyList(),
+                    folderList = folders,
+                    mediaCount = 0,
+                    folderCount = folders.size,
+                    cachedMediaSize = folders.sumOf { it.mediaSize },
+                    cachedMediaDuration = folders.sumOf { it.mediaDuration },
+                )
+            }
+
+            MediaViewMode.VIDEOS -> {
+                val videos = folder.allMediaList.sortedWith(sort.videoComparator())
+                folder.copy(
+                    mediaList = videos,
+                    folderList = emptyList(),
+                    mediaCount = videos.size,
+                    folderCount = 0,
+                    cachedMediaSize = videos.sumOf { it.size },
+                    cachedMediaDuration = videos.sumOf { it.duration },
+                )
+            }
+        }
+    }
+
+    private fun Folder.collectCloudVideoLeafFolders(): List<Folder> {
+        val current = if (mediaList.isNotEmpty()) listOf(copy(folderList = emptyList())) else emptyList()
+        return current + folderList.flatMap { it.collectCloudVideoLeafFolders() }
     }
 
     private fun mapCloudFolder(
@@ -994,6 +1350,19 @@ class MediaPickerViewModel @Inject constructor(
         return withLeadingSlash.removeSuffix("/").ifBlank { "/" }
     }
 
+    private fun WebDavServer.fromApiPath(apiPath: String): String {
+        val normalizedApiPath = normalizePath(apiPath)
+        val storageApiBase = normalizePath(toApiPath("/"))
+        if (storageApiBase == "/" || storageApiBase.isBlank()) return normalizedApiPath
+        return when {
+            normalizedApiPath == storageApiBase -> "/"
+            normalizedApiPath.startsWith("$storageApiBase/") -> {
+                normalizePath(normalizedApiPath.removePrefix(storageApiBase))
+            }
+            else -> normalizedApiPath
+        }
+    }
+
     private fun toWebDavAbsolutePath(server: WebDavServer, relativePath: String): String {
         val normalizedBase = cloudStorageDisplayBasePath(server)
         val normalizedRelative = normalizePath(relativePath)
@@ -1125,12 +1494,13 @@ class MediaPickerViewModel @Inject constructor(
                         rootCachedMetadata = folderMetadataMap[normalizePath(path)],
                     )
                 }
-                val displayFolder = resolveCloudVideoFolders(
+                val displayFolder = resolveCloudFolderForViewMode(
                     folder = refreshedFolder,
                     preferences = preferences,
                 )
 
                 if (requestToken != cloudLoadRequestToken) return@collect
+                if (!shouldApplyCloudDisplayFolder(preferences, refreshedFolder, displayFolder)) return@collect
 
                 val currentFolderMetadata = folderMetadataMap[normalizePath(path)]
                 if (currentFolderMetadata == null ||
@@ -1237,11 +1607,81 @@ class MediaPickerViewModel @Inject constructor(
 
 private const val CLOUD_LOG_TAG = "CloudMediaPicker"
 private const val CLOUD_FLOW_LOG_TAG = "CloudFolderFlow"
+private const val CLOUD_SEARCH_LOG_TAG = "CloudSearchMediaPicker"
 private const val CLOUD_SERVER_PATH_PREFIX = "__cloud_server__"
+private const val CLOUD_INDEX_SEARCH_PAGE_SIZE = 10_000
+private const val CLOUD_INDEX_SEARCH_MAX_RESULTS = 50_000
+private const val CLOUD_INDEX_PARENT_LIST_PAGE_SIZE = 5_000
+private val CLOUD_INDEX_VIDEO_EXTENSIONS = setOf(
+    "mp4", "mkv", "webm", "mov", "avi", "m4v", "flv", "wmv", "ts", "m2ts", "3gp", "mpg", "mpeg", "rmvb",
+)
+
+private data class CloudIndexedVideo(
+    val item: FsSearchItem,
+    val parentPath: String,
+)
+
+private fun ApplicationPreferences.hasDifferentCloudDisplayShape(
+    other: ApplicationPreferences,
+): Boolean = mediaViewMode != other.mediaViewMode ||
+    sortBy != other.sortBy ||
+    sortOrder != other.sortOrder
+
+private fun Folder.hasCloudDisplayContent(): Boolean = folderList.isNotEmpty() || mediaList.isNotEmpty()
+
+private fun shouldApplyCloudDisplayFolder(
+    preferences: ApplicationPreferences,
+    sourceFolder: Folder,
+    displayFolder: Folder,
+): Boolean = preferences.mediaViewMode == MediaViewMode.FOLDER_TREE ||
+    displayFolder.hasCloudDisplayContent() ||
+    sourceFolder.folderList.isEmpty()
+
+private fun FsSearchItem.isIndexedCloudVideoFile(): Boolean {
+    if (is_dir || size <= 0L) return false
+    val extension = name
+        .substringBefore('?')
+        .substringBefore('#')
+        .substringAfterLast('/', name)
+        .substringAfterLast('.', "")
+        .lowercase()
+    return extension in CLOUD_INDEX_VIDEO_EXTENSIONS
+}
+
+private fun FsSearchItem.toSyntheticWebDavMediaItem(
+    server: WebDavServer,
+    parentPath: String,
+): WebDavMediaItem {
+    val serverUri = Uri.parse(server.url)
+    val authority = if (serverUri.port != -1) "${serverUri.host}:${serverUri.port}" else serverUri.host.orEmpty()
+    val rootBaseUrl = "${serverUri.scheme}://$authority"
+    val apiParentPath = server.toApiPath(parentPath)
+    val encodedDirSegments = apiParentPath.removePrefix("/")
+        .split('/')
+        .filter { it.isNotBlank() }
+        .joinToString("/") { Uri.encode(Uri.decode(it)) }
+    val encodedName = Uri.encode(Uri.decode(name))
+    val href = if (encodedDirSegments.isBlank()) {
+        "$rootBaseUrl/d/$encodedName"
+    } else {
+        "$rootBaseUrl/d/$encodedDirSegments/$encodedName"
+    }
+    return WebDavMediaItem(
+        name = Uri.decode(name),
+        href = href,
+        contentType = "",
+        size = size,
+        lastModified = null,
+        isDirectory = false,
+        serverId = server.id,
+        rawVideoUrl = href,
+    )
+}
 
 @Stable
 data class MediaPickerUiState(
     val folderName: String?,
+    val folderPath: String? = null,
     val mediaDataState: DataState<Folder?> = DataState.Loading,
     val refreshing: Boolean = false,
     val preferences: ApplicationPreferences = ApplicationPreferences(),
@@ -1264,6 +1704,7 @@ sealed interface MediaPickerUiEvent {
     data class AddToSync(val uri: Uri) : MediaPickerUiEvent
     data class UpdateMenu(val preferences: ApplicationPreferences) : MediaPickerUiEvent
     data object ToggleMode : MediaPickerUiEvent
+    data class OpenLocalFolder(val folderPath: String?) : MediaPickerUiEvent
     data class SelectCloudServer(val serverId: Int) : MediaPickerUiEvent
     data class ToggleCloudServerSelection(val serverId: Int) : MediaPickerUiEvent
     data class OpenCloudFolder(val path: String) : MediaPickerUiEvent

@@ -14,7 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
+import com.sakurafubuki.yume.core.ui.theme.YumeSpacing
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -25,6 +25,7 @@ fun NextTopAppBar(
     actions: @Composable RowScope.() -> Unit = {},
     colors: TopAppBarColors = TopAppBarDefaults.topAppBarColors(
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        titleContentColor = MaterialTheme.colorScheme.primary,
     ),
 ) {
     TopAppBar(
@@ -37,7 +38,7 @@ fun NextTopAppBar(
         actions = actions,
         colors = colors,
         modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 8.dp),
+        contentPadding = PaddingValues(horizontal = YumeSpacing.componentGap),
     )
 }
 
@@ -51,6 +52,7 @@ fun NextTopAppBar(
     actions: @Composable RowScope.() -> Unit = {},
     colors: TopAppBarColors = TopAppBarDefaults.topAppBarColors(
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        titleContentColor = MaterialTheme.colorScheme.primary,
     ),
 ) {
     NextTopAppBar(

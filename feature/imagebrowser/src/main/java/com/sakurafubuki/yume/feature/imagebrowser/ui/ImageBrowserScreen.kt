@@ -120,6 +120,7 @@ import com.sakurafubuki.yume.core.ui.motion.LocalSharedElementRegistry
 import com.sakurafubuki.yume.core.ui.motion.LocalTransitionEngine
 import com.sakurafubuki.yume.core.ui.motion.SharedElementRegistry
 import com.sakurafubuki.yume.core.ui.motion.TransitionType
+import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpringSpec
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
@@ -231,12 +232,25 @@ fun ImageBrowserRoute(
     val gridLockState = remember { mutableStateOf(false) }
 
     LaunchedEffect(normalizedRoutePath, routeCloudServerId, uiState.mode) {
-        if (
+        when {
             routeCloudServerId == null &&
-            uiState.mode == MediaMode.LOCAL &&
-            normalizePath(uiState.localPath) != normalizedRoutePath
-        ) {
-            viewModel.onEvent(ImageBrowserUiEvent.OpenLocalFolder(normalizedRoutePath))
+                uiState.mode == MediaMode.LOCAL &&
+                normalizePath(uiState.localPath) != normalizedRoutePath -> {
+                viewModel.onEvent(ImageBrowserUiEvent.OpenLocalFolder(normalizedRoutePath))
+            }
+
+            routeCloudServerId != null &&
+                uiState.mode == MediaMode.CLOUD &&
+                (
+                    uiState.selectedCloudServerId != routeCloudServerId ||
+                        normalizePath(uiState.cloudPath) != normalizedRoutePath
+                    ) -> {
+                viewModel.onEvent(
+                    ImageBrowserUiEvent.OpenCloudFolder(
+                        "$CLOUD_SERVER_PATH_PREFIX$routeCloudServerId:$normalizedRoutePath",
+                    ),
+                )
+            }
         }
     }
 
@@ -379,24 +393,25 @@ private fun ImageBrowserScreen(
         },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) { scaffoldPadding ->
+        val modeSwitchSpatialSpec = yumePageSpatialSpringSpec()
         val contentScaffoldPadding = scaffoldPadding.copy(bottom = 0.dp)
         AnimatedContent(
             targetState = uiState.mode,
             transitionSpec = {
                 if (targetState == MediaMode.CLOUD) {
                     slideInHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         initialOffsetX = { fullWidth -> fullWidth },
                     ) togetherWith slideOutHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         targetOffsetX = { fullWidth -> (-fullWidth * 0.3f).toInt() },
                     )
                 } else {
                     slideInHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         initialOffsetX = { fullWidth -> (-fullWidth * 0.3f).toInt() },
                     ) togetherWith slideOutHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         targetOffsetX = { fullWidth -> fullWidth },
                     )
                 }
@@ -422,7 +437,6 @@ private fun ImageBrowserScreen(
                         onRefresh = { onEvent(ImageBrowserUiEvent.RefreshLocal) },
                         onFolderClick = { path ->
                             val normalizedPath = normalizePath(path)
-                            onEvent(ImageBrowserUiEvent.OpenLocalFolder(normalizedPath))
                             onNavigateToPath(normalizedPath, null)
                         },
                         onMediaClick = { uri ->

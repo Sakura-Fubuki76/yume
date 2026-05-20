@@ -32,8 +32,6 @@ import com.sakurafubuki.yume.core.model.MediaViewMode
 import com.sakurafubuki.yume.core.model.Sort
 import com.sakurafubuki.yume.core.model.Video
 import com.sakurafubuki.yume.core.model.WebDavServer
-import com.sakurafubuki.yume.feature.imagebrowser.navigation.imageBrowserCloudServerIdArg
-import com.sakurafubuki.yume.feature.imagebrowser.navigation.imageBrowserPathArg
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -70,20 +68,13 @@ class ImageBrowserViewModel @Inject constructor(
     private val savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    private val routePath = normalizePath(
-        Uri.decode(savedStateHandle.get<String>(imageBrowserPathArg).orEmpty()).ifBlank { ROOT_PATH },
-    )
-    private val initialCloudServerIdFromRoute = savedStateHandle.get<String>(imageBrowserCloudServerIdArg)?.toIntOrNull()
     private val initialLocalPath = savedStateHandle.get<String>(IMAGE_LOCAL_PATH_KEY)
         ?.let(::normalizePath)
-        ?: routePath.takeIf { initialCloudServerIdFromRoute == null }
         ?: ROOT_PATH
     private val initialCloudPath = savedStateHandle.get<String>(IMAGE_CLOUD_PATH_KEY)
         ?.let(::normalizePath)
-        ?: routePath.takeIf { initialCloudServerIdFromRoute != null }
         ?: ROOT_PATH
     private val initialCloudServerId = savedStateHandle.get<Int>(IMAGE_CLOUD_SERVER_ID_KEY)
-        ?: initialCloudServerIdFromRoute
     private val initialCloudServerIds = savedStateHandle.get<ArrayList<Int>>(IMAGE_CLOUD_SERVER_IDS_KEY)?.toSet()
 
     private var cloudLoadJob: Job? = null

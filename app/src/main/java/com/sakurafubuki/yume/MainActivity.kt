@@ -28,13 +28,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.navigation.compose.currentBackStackEntryAsState
-import androidx.navigation.compose.rememberNavController
+import androidx.navigation3.runtime.rememberNavBackStack
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -54,6 +54,10 @@ import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerStore
 import com.sakurafubuki.yume.navigation.AppBottomNavBar
 import com.sakurafubuki.yume.navigation.AppNavHost
 import com.sakurafubuki.yume.navigation.Screen
+import com.sakurafubuki.yume.navigation3.ImageBrowserKey
+import com.sakurafubuki.yume.navigation3.MediaPickerKey
+import com.sakurafubuki.yume.navigation3.SettingsHomeKey
+import com.sakurafubuki.yume.navigation3.popOrFalse
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 import kotlinx.coroutines.launch
@@ -147,31 +151,14 @@ private fun MainScreen(
     onExitApp: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     val pagerState = rememberPagerState(initialPage = 0) { 3 }
-    val mediaNavController = rememberNavController()
-    val imageNavController = rememberNavController()
-    val settingsNavController = rememberNavController()
-
-    val mediaBackStack by mediaNavController.currentBackStackEntryAsState()
-    val imageBackStack by imageNavController.currentBackStackEntryAsState()
-    val settingsBackStack by settingsNavController.currentBackStackEntryAsState()
+    val mediaBackStack = rememberNavBackStack(MediaPickerKey())
+    val imageBackStack = rememberNavBackStack(ImageBrowserKey())
+    val settingsBackStack = rememberNavBackStack(SettingsHomeKey)
 
     val selectedScreen = pageToScreen(pagerState.currentPage)
-    val currentTabNavController = when (selectedScreen) {
-        Screen.Video -> mediaNavController
-        Screen.Image -> imageNavController
-        Screen.Settings -> settingsNavController
-        Screen.ImageViewer -> imageNavController
-    }
-    val selectedTabRoute = when (selectedScreen) {
-        Screen.Video -> mediaBackStack?.destination?.route.orEmpty()
-        Screen.Image, Screen.ImageViewer -> imageBackStack?.destination?.route.orEmpty()
-        Screen.Settings -> settingsBackStack?.destination?.route.orEmpty()
-    }
-    val bottomBarVisible = !(
-        selectedScreen == Screen.Image &&
-            (isImageViewerRoute(selectedTabRoute) || ImageViewerStore.isViewerShowing)
-        )
+    val bottomBarVisible = !(selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing)
     val tabSwipeEnabled = bottomBarVisible
 
     val transitionEngine = remember { TransitionEngine() }
@@ -191,7 +178,18 @@ private fun MainScreen(
     }
 
     BackHandler {
-        val popped = currentTabNavController.popBackStack()
+        val popped = when (selectedScreen) {
+            Screen.Video -> mediaBackStack.popOrFalse()
+            Screen.Image -> {
+                if (ImageViewerStore.isViewerShowing) {
+                    ImageViewerStore.hideViewer()
+                    true
+                } else {
+                    imageBackStack.popOrFalse()
+                }
+            }
+            Screen.Settings -> settingsBackStack.popOrFalse()
+        }
         if (popped) return@BackHandler
 
         onExitApp()
@@ -232,11 +230,11 @@ private fun MainScreen(
                 },
             ) { innerPadding ->
                 AppNavHost(
-                    context = mediaNavController.context,
+                    context = context,
                     pagerState = pagerState,
-                    mediaNavController = mediaNavController,
-                    imageNavController = imageNavController,
-                    settingsNavController = settingsNavController,
+                    mediaBackStack = mediaBackStack,
+                    imageBackStack = imageBackStack,
+                    settingsBackStack = settingsBackStack,
                     onNavigateToSettingsTab = {
                         scope.launch {
                             pagerState.animateScrollToPage(screenToPage(Screen.Settings))
@@ -264,10 +262,7 @@ private fun screenToPage(screen: Screen): Int = when (screen) {
     Screen.Video -> 0
     Screen.Image -> 1
     Screen.Settings -> 2
-    Screen.ImageViewer -> 1
 }
-
-private fun isImageViewerRoute(route: String): Boolean = route.startsWith("image_viewer")
 
 @Composable
 fun shouldUseDarkTheme(

@@ -6,7 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -105,6 +104,7 @@ import com.sakurafubuki.yume.core.ui.components.NextTopAppBar
 import com.sakurafubuki.yume.core.ui.composables.PermissionMissingView
 import com.sakurafubuki.yume.core.ui.designsystem.NextIcons
 import com.sakurafubuki.yume.core.ui.extensions.copy
+import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpringSpec
 import com.sakurafubuki.yume.core.ui.preview.DayNightPreview
 import com.sakurafubuki.yume.core.ui.preview.VideoPickerPreviewParameterProvider
 import com.sakurafubuki.yume.core.ui.theme.YumeTheme
@@ -122,6 +122,9 @@ import com.sakurafubuki.yume.feature.videopicker.state.rememberSelectionManager
 @Composable
 fun MediaPickerRoute(
     viewModel: MediaPickerViewModel = hiltViewModel(),
+    routeFolderId: String? = null,
+    routeCloudPath: String? = null,
+    routeCloudServerId: Int? = null,
     onPlayVideo: (uri: Uri) -> Unit,
     onPlayVideos: (uris: List<Uri>) -> Unit,
     onFolderClick: (folderPath: String) -> Unit,
@@ -132,6 +135,34 @@ fun MediaPickerRoute(
     onNavigateUp: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val normalizedRouteFolderId = remember(routeFolderId) { routeFolderId?.ifBlank { null } }
+    val normalizedRouteCloudPath = remember(routeCloudPath) { routeCloudPath?.let(::normalizePath) ?: "/" }
+
+    LaunchedEffect(
+        normalizedRouteFolderId,
+        normalizedRouteCloudPath,
+        routeCloudServerId,
+        uiState.mode,
+    ) {
+        when {
+            uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.LOCAL &&
+                uiState.folderPath != normalizedRouteFolderId -> {
+                viewModel.onEvent(MediaPickerUiEvent.OpenLocalFolder(normalizedRouteFolderId))
+            }
+
+            uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD &&
+                (routeCloudPath != null || routeCloudServerId != null) &&
+                (
+                    uiState.selectedCloudServerId != routeCloudServerId ||
+                        normalizePath(uiState.cloudPath) != normalizedRouteCloudPath
+                    ) -> {
+                val targetPath = routeCloudServerId?.let { serverId ->
+                    "$CLOUD_SERVER_PATH_PREFIX$serverId:$normalizedRouteCloudPath"
+                } ?: normalizedRouteCloudPath
+                viewModel.onEvent(MediaPickerUiEvent.OpenCloudFolder(targetPath))
+            }
+        }
+    }
 
     MediaPickerScreen(
         uiState = uiState,
@@ -467,24 +498,25 @@ internal fun MediaPickerScreen(
         },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) { scaffoldPadding ->
+        val modeSwitchSpatialSpec = yumePageSpatialSpringSpec()
         val contentScaffoldPadding = scaffoldPadding.copy(bottom = 0.dp)
         AnimatedContent(
             targetState = uiState.mode,
             transitionSpec = {
                 if (targetState == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
                     slideInHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         initialOffsetX = { fullWidth -> fullWidth },
                     ) togetherWith slideOutHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         targetOffsetX = { fullWidth -> (-fullWidth * 0.3f).toInt() },
                     )
                 } else {
                     slideInHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         initialOffsetX = { fullWidth -> (-fullWidth * 0.3f).toInt() },
                     ) togetherWith slideOutHorizontally(
-                        animationSpec = tween(durationMillis = 280),
+                        animationSpec = modeSwitchSpatialSpec,
                         targetOffsetX = { fullWidth -> fullWidth },
                     )
                 }
