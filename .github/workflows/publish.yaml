@@ -47,31 +47,31 @@ jobs:
           -PRELEASE_KEY_PASSWORD=${{ secrets.KEY_PASSWORD }}
 
       - name: Upload arm64-v8a APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-arm64-v8a
           path: app/build/outputs/apk/release/*-arm64-v8a-*.apk
 
       - name: Upload armeabi-v7a APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-armeabi-v7a
           path: app/build/outputs/apk/release/*-armeabi-v7a-*.apk
 
       - name: Upload x86 APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-x86
           path: app/build/outputs/apk/release/*-x86-*.apk
 
       - name: Upload x86_64 APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-x86_64
           path: app/build/outputs/apk/release/*-x86_64-*.apk
 
       - name: Upload universal APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-universal
           path: app/build/outputs/apk/release/*-universal-*.apk

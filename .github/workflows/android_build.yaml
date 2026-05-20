@@ -43,38 +43,38 @@ jobs:
         run: ./gradlew ktlintCheck
 
       - name: Upload arm64-v8a APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-arm64-v8a-debug
           path: app/build/outputs/apk/debug/*-arm64-v8a-*.apk
 
       - name: Upload armeabi-v7a APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-armeabi-v7a-debug
           path: app/build/outputs/apk/debug/*-armeabi-v7a-*.apk
 
       - name: Upload x86 APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-x86-debug
           path: app/build/outputs/apk/debug/*-x86-*.apk
 
       - name: Upload x86_64 APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-x86_64-debug
           path: app/build/outputs/apk/debug/*-x86_64-*.apk
 
       - name: Upload universal APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: yume-universal-debug
           path: app/build/outputs/apk/debug/*-universal-*.apk
 
       - name: Upload build reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: build-reports
           path: app/build/reports
