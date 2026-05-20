@@ -7,6 +7,9 @@ import androidx.lifecycle.viewModelScope
 import com.sakurafubuki.yume.core.data.repository.MediaRepository
 import com.sakurafubuki.yume.core.data.repository.PreferencesRepository
 import com.sakurafubuki.yume.core.domain.GetSortedPlaylistUseCase
+import com.sakurafubuki.yume.core.model.Anime4KAutoDownscalePreMode
+import com.sakurafubuki.yume.core.model.Anime4KRestoreMode
+import com.sakurafubuki.yume.core.model.Anime4KUpscaleMode
 import com.sakurafubuki.yume.core.model.LoopMode
 import com.sakurafubuki.yume.core.model.PlayerPreferences
 import com.sakurafubuki.yume.core.model.Video
@@ -78,6 +81,28 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun toggleAnime4KEffects() {
+        viewModelScope.launch {
+            preferencesRepository.updatePlayerPreferences { preferences ->
+                if (preferences.isAnime4KEnabled()) {
+                    preferences.copy(
+                        anime4KRestoreMode = Anime4KRestoreMode.OFF,
+                        anime4KAutoDownscalePreMode = Anime4KAutoDownscalePreMode.OFF,
+                        anime4KUpscaleMode = Anime4KUpscaleMode.OFF,
+                        enableAnime4KClampHighlights = false,
+                    )
+                } else {
+                    preferences.copy(
+                        anime4KRestoreMode = Anime4KRestoreMode.M,
+                        anime4KAutoDownscalePreMode = Anime4KAutoDownscalePreMode.X2,
+                        anime4KUpscaleMode = Anime4KUpscaleMode.CNN_X2_M,
+                        enableAnime4KClampHighlights = true,
+                    )
+                }
+            }
+        }
+    }
+
     fun onVideoZoomEvent(event: VideoZoomEvent) {
         when (event) {
             is VideoZoomEvent.ContentScaleChanged -> {
@@ -119,3 +144,8 @@ data class PlayerUiState(
 )
 
 sealed interface PlayerEvent
+
+private fun PlayerPreferences.isAnime4KEnabled(): Boolean = anime4KRestoreMode != Anime4KRestoreMode.OFF ||
+    anime4KAutoDownscalePreMode != Anime4KAutoDownscalePreMode.OFF ||
+    anime4KUpscaleMode != Anime4KUpscaleMode.OFF ||
+    enableAnime4KClampHighlights

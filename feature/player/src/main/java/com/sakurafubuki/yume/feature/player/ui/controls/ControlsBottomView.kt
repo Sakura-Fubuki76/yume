@@ -23,8 +23,6 @@ import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -61,6 +59,7 @@ import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.model.ChapterEntry
 import com.sakurafubuki.yume.core.model.VideoContentScale
 import com.sakurafubuki.yume.core.ui.R
+import com.sakurafubuki.yume.core.ui.designsystem.NextIcons
 import com.sakurafubuki.yume.core.ui.extensions.copy
 import com.sakurafubuki.yume.feature.player.LocalUseMaterialYouControls
 import com.sakurafubuki.yume.feature.player.buttons.LoopButton
@@ -83,6 +82,7 @@ fun ControlsBottomView(
     mediaPresentationState: MediaPresentationState,
     controlsAlignment: Alignment.Horizontal,
     videoContentScale: VideoContentScale,
+    anime4KEnabled: Boolean,
     isPipSupported: Boolean,
     spriteSheetState: SpriteSheetState? = null,
     isSeeking: Boolean = false,
@@ -94,7 +94,7 @@ fun ControlsBottomView(
     onPictureInPictureClick: () -> Unit,
     onRotateClick: () -> Unit,
     onPlayInBackgroundClick: () -> Unit,
-    onVideoInfoClick: () -> Unit = {},
+    onAnime4KClick: () -> Unit = {},
     onSeek: (Long) -> Unit,
     onSeekEnd: () -> Unit,
 ) {
@@ -225,11 +225,12 @@ fun ControlsBottomView(
 
             PlayerButton(
                 modifier = Modifier.align(Alignment.CenterEnd),
-                onClick = onVideoInfoClick,
+                onClick = onAnime4KClick,
             ) {
                 Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = null,
+                    imageVector = NextIcons.AutoFix,
+                    contentDescription = stringResource(R.string.anime4k_upscale_title),
+                    tint = if (anime4KEnabled) Color.White else Color.White.copy(alpha = 0.45f),
                 )
             }
         }
