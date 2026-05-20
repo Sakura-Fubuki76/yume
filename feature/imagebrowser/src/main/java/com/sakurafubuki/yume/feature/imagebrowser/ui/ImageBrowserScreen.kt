@@ -18,7 +18,6 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,7 +27,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,10 +41,11 @@ import androidx.compose.foundation.lazy.staggeredgrid.rememberLazyStaggeredGridS
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
@@ -291,6 +290,7 @@ private fun ImageBrowserScreen(
     var showQuickSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var showCloudServerSelectorDialog by rememberSaveable { mutableStateOf(false) }
     var showModeSwitchDialog by rememberSaveable { mutableStateOf(false) }
+    var showStorageMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(permissionGranted) {
         if (permissionGranted) {
@@ -332,7 +332,11 @@ private fun ImageBrowserScreen(
         topBar = {
             NextTopAppBar(
                 title = when (uiState.mode) {
-                    MediaMode.LOCAL -> currentFolder?.name ?: stringResource(R.string.app_name)
+                    MediaMode.LOCAL -> if (normalizePath(uiState.localPath) == "/") {
+                        stringResource(R.string.app_name)
+                    } else {
+                        currentFolder?.name ?: stringResource(R.string.app_name)
+                    }
                     MediaMode.CLOUD -> currentFolder?.name ?: selectedCloudServer?.name ?: stringResource(R.string.app_name)
                 },
                 navigationIcon = {
@@ -362,28 +366,55 @@ private fun ImageBrowserScreen(
                     }
                 },
                 actions = {
-                    Box(
-                        modifier = Modifier
-                            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-                            .clip(CircleShape)
-                            .combinedClickable(
-                                onClick = { showModeSwitchDialog = true },
-                                onLongClick = {
-                                    if (uiState.mode == MediaMode.CLOUD) {
-                                        showCloudServerSelectorDialog = true
-                                    }
+                    Box {
+                        IconButton(onClick = { showStorageMenu = true }) {
+                            Icon(
+                                imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Cloud else NextIcons.Folder,
+                                contentDescription = stringResource(R.string.switch_mode),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showStorageMenu,
+                            onDismissRequest = { showStorageMenu = false },
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (uiState.mode == MediaMode.CLOUD) {
+                                            stringResource(R.string.switch_to_local_mode)
+                                        } else {
+                                            stringResource(R.string.switch_to_cloud_mode)
+                                        },
+                                    )
                                 },
-                            ),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            imageVector = NextIcons.Sync,
-                            contentDescription = if (uiState.mode == MediaMode.CLOUD) {
-                                stringResource(R.string.switch_to_local_mode)
-                            } else {
-                                stringResource(R.string.switch_to_cloud_mode)
-                            },
-                        )
+                                onClick = {
+                                    showStorageMenu = false
+                                    showModeSwitchDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Folder else NextIcons.Cloud,
+                                        contentDescription = null,
+                                    )
+                                },
+                            )
+                            if (uiState.mode == MediaMode.CLOUD) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.select_webdav_storage)) },
+                                    onClick = {
+                                        showStorageMenu = false
+                                        showCloudServerSelectorDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = NextIcons.Settings,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                )
+                            }
+                        }
                     }
                     IconButton(onClick = { showQuickSettingsDialog = true }) {
                         Icon(imageVector = NextIcons.DashBoard, contentDescription = stringResource(R.string.menu))

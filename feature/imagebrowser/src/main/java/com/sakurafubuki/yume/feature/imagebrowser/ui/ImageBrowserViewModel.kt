@@ -85,6 +85,7 @@ class ImageBrowserViewModel @Inject constructor(
 
     private var localImages = emptyList<LocalImage>()
 
+    private val indexedCloudImageCache = ConcurrentHashMap<String, List<CloudIndexedImage>>()
     private val preloadJobs = ConcurrentHashMap<String, Job>()
     private val cloudPreviewSemaphore = Semaphore(MAX_CLOUD_PREVIEW_CONCURRENT_REQUESTS)
     private val pendingCloudDimensionUpdates = mutableMapOf<String, Pair<Int, Int>>()
@@ -1272,7 +1273,7 @@ class ImageBrowserViewModel @Inject constructor(
     ): Folder? {
         val viewMode = effectiveImageViewMode(preferences.imageViewMode)
         if (viewMode == MediaViewMode.FOLDER_TREE) return null
-        val indexedImages = searchIndexedCloudImages(server = server, path = path) ?: return null
+        val indexedImages = searchIndexedCloudImages(server = server, path = path, refreshing = refreshing) ?: return null
         if (indexedImages.isEmpty()) return null
         val sort = imageSort(preferences)
         val indexedByParent = indexedImages.groupBy { normalizePath(it.parentPath) }
@@ -1386,21 +1387,21 @@ class ImageBrowserViewModel @Inject constructor(
     private suspend fun searchIndexedCloudImages(
         server: WebDavServer,
         path: String,
+        refreshing: Boolean,
     ): List<CloudIndexedImage>? {
-        val keyedResults = mutableListOf<CloudIndexedImage>()
-        val seen = mutableSetOf<String>()
-        for (extension in CLOUD_INDEX_IMAGE_EXTENSIONS) {
-            val extensionResults = searchIndexedCloudImages(
-                server = server,
-                path = path,
-                keywords = ".$extension",
-            ) ?: return null
-            extensionResults.forEach { indexed ->
-                val key = "${normalizePath(indexed.parentPath)}/${indexed.item.name}"
-                if (seen.add(key)) keyedResults += indexed
-            }
+        val cacheKey = "${server.id}:${normalizePath(path)}"
+        if (!refreshing) {
+            indexedCloudImageCache[cacheKey]?.let { return it }
+        } else {
+            indexedCloudImageCache.remove(cacheKey)
         }
-        return keyedResults
+        val indexed = searchIndexedCloudImages(
+            server = server,
+            path = path,
+            keywords = "",
+        ) ?: return null
+        indexedCloudImageCache[cacheKey] = indexed
+        return indexed
     }
 
     private suspend fun searchIndexedCloudImages(
@@ -1413,7 +1414,7 @@ class ImageBrowserViewModel @Inject constructor(
         var page = 1
         var total: Int? = null
         var seenRawItems = 0
-        while (total == null || seenRawItems < total) {
+        while ((total == null || seenRawItems < total) && seenRawItems < CLOUD_INDEX_SEARCH_MAX_RESULTS) {
             val data = openListApi.search(
                 server = server,
                 parent = apiParentPath,
@@ -1427,12 +1428,15 @@ class ImageBrowserViewModel @Inject constructor(
             }
             total = data.total
             if (data.total > CLOUD_INDEX_SEARCH_MAX_RESULTS) {
-                Logger.w(TAG, "image search result too large server=${server.id} path=$path keywords=$keywords total=${data.total}")
-                return null
+                Logger.w(
+                    TAG,
+                    "image search result capped server=${server.id} path=$path keywords=$keywords total=${data.total} cap=$CLOUD_INDEX_SEARCH_MAX_RESULTS",
+                )
             }
             val content = data.content.orEmpty()
             if (content.isEmpty()) break
             seenRawItems += content.size
+            val normalizedRoot = apiParentPath
             files += content
                 .asSequence()
                 .filter { it.isIndexedCloudImageFile() }
@@ -1444,7 +1448,6 @@ class ImageBrowserViewModel @Inject constructor(
                 }
                 .filter { indexed ->
                     val normalizedParent = normalizePath(indexed.parentPath)
-                    val normalizedRoot = normalizePath(path)
                     normalizedRoot == ROOT_PATH ||
                         normalizedParent == normalizedRoot ||
                         normalizedParent.startsWith("$normalizedRoot/")
@@ -1865,8 +1868,9 @@ class ImageBrowserViewModel @Inject constructor(
         }
 
         if (cachedItems == null) {
-            val apiResult = openListApi.listDirectory(server, path, page = 1, perPage = 200).getOrNull()
-            cachedItems = apiResult?.content?.map { it.toWebDavMediaItem(server, path) }
+            val apiPath = server.toApiPath(path)
+            val apiResult = openListApi.listDirectory(server, apiPath, page = 1, perPage = 200).getOrNull()
+            cachedItems = apiResult?.content?.map { it.toWebDavMediaItem(server, apiPath) }
                 ?.also { webDavDirectoryCache.put(server.id, path, it) }
         }
         if (cachedItems == null) return listOf(child)
