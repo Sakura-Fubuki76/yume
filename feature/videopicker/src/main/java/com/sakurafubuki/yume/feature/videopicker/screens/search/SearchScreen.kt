@@ -74,11 +74,24 @@ import com.sakurafubuki.yume.feature.videopicker.composables.MediaView
 @Composable
 fun SearchRoute(
     viewModel: SearchViewModel = hiltViewModel(),
+    cloudPath: String? = null,
+    cloudServerId: Int? = null,
+    cloudServerIds: List<Int> = emptyList(),
     onPlayVideo: (uri: Uri) -> Unit,
     onFolderClick: (folderPath: String) -> Unit,
     onNavigateUp: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(cloudPath, cloudServerId, cloudServerIds) {
+        viewModel.onEvent(
+            SearchUiEvent.SetCloudScope(
+                cloudPath = cloudPath,
+                cloudServerId = cloudServerId,
+                cloudServerIds = cloudServerIds,
+            ),
+        )
+    }
 
     SearchScreen(
         uiState = uiState,

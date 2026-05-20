@@ -19,7 +19,11 @@ data class MediaPickerKey(
 ) : MediaNavKey
 
 @Serializable
-data object SearchKey : MediaNavKey
+data class SearchKey(
+    val cloudPath: String? = null,
+    val cloudServerId: Int? = null,
+    val cloudServerIds: List<Int> = emptyList(),
+) : MediaNavKey
 
 @Serializable
 sealed interface ImageNavKey : YumeNavKey

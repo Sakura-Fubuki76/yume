@@ -56,9 +56,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.GlEffect
+import androidx.media3.exoplayer.ExoPlayer
 import com.sakurafubuki.yume.core.data.repository.MoovIndexCache
+import com.sakurafubuki.yume.core.model.Anime4KAutoDownscalePreMode
+import com.sakurafubuki.yume.core.model.Anime4KRestoreMode
+import com.sakurafubuki.yume.core.model.Anime4KUpscaleMode
 import com.sakurafubuki.yume.core.model.ControlButtonsPosition
 import com.sakurafubuki.yume.core.model.PlayerPreferences
+import com.sakurafubuki.yume.core.model.VideoEffectType
 import com.sakurafubuki.yume.core.model.WebDavServer
 import com.sakurafubuki.yume.core.ui.R as coreUiR
 import com.sakurafubuki.yume.core.ui.extensions.copy
@@ -67,6 +73,11 @@ import com.sakurafubuki.yume.feature.player.buttons.NextButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayPauseButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayerButton
 import com.sakurafubuki.yume.feature.player.buttons.PreviousButton
+import com.sakurafubuki.yume.feature.player.effect.Anime4KClampHighlightsEffect
+import com.sakurafubuki.yume.feature.player.effect.Anime4KRestoreEffect
+import com.sakurafubuki.yume.feature.player.effect.Anime4KUpscaleEffect
+import com.sakurafubuki.yume.feature.player.effect.DebandEffect
+import com.sakurafubuki.yume.feature.player.effect.DitherEffect
 import com.sakurafubuki.yume.feature.player.extensions.nameRes
 import com.sakurafubuki.yume.feature.player.state.ControlsVisibilityState
 import com.sakurafubuki.yume.feature.player.state.VerticalGesture
@@ -81,7 +92,6 @@ import com.sakurafubuki.yume.feature.player.state.rememberRotationState
 import com.sakurafubuki.yume.feature.player.state.rememberSeekGestureState
 import com.sakurafubuki.yume.feature.player.state.rememberSpriteSheetState
 import com.sakurafubuki.yume.feature.player.state.rememberTapGestureState
-import com.sakurafubuki.yume.feature.player.state.rememberVideoInfoState
 import com.sakurafubuki.yume.feature.player.state.rememberVideoZoomAndContentScaleState
 import com.sakurafubuki.yume.feature.player.state.rememberVolumeAndBrightnessGestureState
 import com.sakurafubuki.yume.feature.player.state.rememberVolumeState
@@ -92,7 +102,6 @@ import com.sakurafubuki.yume.feature.player.ui.OverlayShowView
 import com.sakurafubuki.yume.feature.player.ui.OverlayView
 import com.sakurafubuki.yume.feature.player.ui.SubtitleConfiguration
 import com.sakurafubuki.yume.feature.player.ui.VerticalProgressView
-import com.sakurafubuki.yume.feature.player.ui.VideoInfoOverlay
 import com.sakurafubuki.yume.feature.player.ui.controls.ControlsBottomView
 import com.sakurafubuki.yume.feature.player.ui.controls.ControlsTopView
 import kotlin.time.Duration.Companion.seconds
@@ -193,10 +202,21 @@ fun MediaPlayerScreen(
         webDavServersProvider = webDavServersById,
     )
 
-    val videoInfoState = rememberVideoInfoState(player)
-
     val mediaId = player.currentMediaItem?.mediaId ?: ""
     val chapters = MoovIndexCache.getChapters(mediaId)
+
+    LaunchedEffect(
+        player,
+        playerPreferences.anime4KRestoreMode,
+        playerPreferences.anime4KAutoDownscalePreMode,
+        playerPreferences.anime4KUpscaleMode,
+        playerPreferences.enableAnime4KClampHighlights,
+        playerPreferences.enableDeband,
+        playerPreferences.enableDither,
+        playerPreferences.videoEffectsOrder,
+    ) {
+        (player as? ExoPlayer)?.setVideoEffects(playerPreferences.buildVideoEffects())
+    }
 
     DisposableEffect(player, webDavServersById().size) {
         val listener = object : Player.Listener {
@@ -242,7 +262,7 @@ fun MediaPlayerScreen(
     }
 
     var overlayView by remember { mutableStateOf<OverlayView?>(null) }
-    var showVideoInfo by remember { mutableStateOf(false) }
+    val anime4KEnabled = playerPreferences.isAnime4KEnabled()
 
     CompositionLocalProvider(LocalControlsVisibilityState provides controlsVisibilityState) {
         Box {
@@ -390,6 +410,7 @@ fun MediaPlayerScreen(
                                         ControlButtonsPosition.RIGHT -> Alignment.End
                                     },
                                     videoContentScale = videoZoomAndContentScaleState.videoContentScale,
+                                    anime4KEnabled = anime4KEnabled,
                                     isPipSupported = pictureInPictureState.isPipSupported,
                                     spriteSheetState = spriteSheetState,
                                     isSeeking = seekGestureState.isSeeking,
@@ -419,8 +440,8 @@ fun MediaPlayerScreen(
                                             pictureInPictureState.enterPictureInPictureMode()
                                         }
                                     },
-                                    onVideoInfoClick = {
-                                        showVideoInfo = !showVideoInfo
+                                    onAnime4KClick = {
+                                        viewModel.toggleAnime4KEffects()
                                         controlsVisibilityState.showControls()
                                     },
                                 )
@@ -461,13 +482,6 @@ fun MediaPlayerScreen(
                             icon = painterResource(coreUiR.drawable.ic_brightness),
                         )
                     }
-
-                    VideoInfoOverlay(
-                        state = videoInfoState,
-                        visible = showVideoInfo,
-                        onDismiss = { showVideoInfo = false },
-                        modifier = Modifier.align(Alignment.CenterStart),
-                    )
                 }
             }
 
@@ -525,10 +539,29 @@ fun MediaPlayerScreen(
     BackHandler {
         if (overlayView != null) {
             overlayView = null
-        } else if (showVideoInfo) {
-            showVideoInfo = false
         } else {
             onBackClick()
+        }
+    }
+}
+
+private fun PlayerPreferences.isAnime4KEnabled(): Boolean = anime4KRestoreMode != Anime4KRestoreMode.OFF ||
+    anime4KAutoDownscalePreMode != Anime4KAutoDownscalePreMode.OFF ||
+    anime4KUpscaleMode != Anime4KUpscaleMode.OFF ||
+    enableAnime4KClampHighlights
+
+private fun PlayerPreferences.buildVideoEffects(): List<GlEffect> {
+    val orderedTypes = videoEffectsOrder
+    return orderedTypes.mapNotNull { type ->
+        when (type) {
+            VideoEffectType.AUTODOWNSCALEPRE -> null
+            VideoEffectType.UPSCALE -> anime4KUpscaleMode.takeIf { it != Anime4KUpscaleMode.OFF }
+                ?.let { Anime4KUpscaleEffect(it, anime4KAutoDownscalePreMode) }
+            VideoEffectType.RESTORE -> anime4KRestoreMode.takeIf { it != Anime4KRestoreMode.OFF }
+                ?.let { Anime4KRestoreEffect(it) }
+            VideoEffectType.DEBAND -> if (enableDeband) DebandEffect() else null
+            VideoEffectType.CLAMP_HIGHLIGHTS -> if (enableAnime4KClampHighlights) Anime4KClampHighlightsEffect() else null
+            VideoEffectType.DITHER -> if (enableDither) DitherEffect() else null
         }
     }
 }

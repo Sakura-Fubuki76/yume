@@ -36,6 +36,16 @@ fun mediaPickerKey(
     cloudServerId = cloudServerId,
 )
 
+fun searchKey(
+    cloudPath: String? = null,
+    cloudServerId: Int? = null,
+    cloudServerIds: Collection<Int> = emptyList(),
+): SearchKey = SearchKey(
+    cloudPath = cloudPath?.normalizePathOrRoot(),
+    cloudServerId = cloudServerId,
+    cloudServerIds = cloudServerIds.distinct(),
+)
+
 fun imageBrowserKey(
     path: String = "/",
     cloudServerId: Int? = null,

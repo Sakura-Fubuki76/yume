@@ -131,7 +131,7 @@ fun MediaPickerRoute(
     onCloudFolderClick: (cloudPath: String, cloudServerId: Int?) -> Unit,
     onCloudBackFromPath: (fallbackPath: String, cloudServerId: Int?) -> Unit,
     onSettingsClick: () -> Unit,
-    onSearchClick: () -> Unit,
+    onSearchClick: (cloudPath: String?, cloudServerId: Int?, cloudServerIds: Set<Int>) -> Unit,
     onNavigateUp: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -189,7 +189,7 @@ internal fun MediaPickerScreen(
     onCloudFolderClick: (String, Int?) -> Unit = { _, _ -> },
     onCloudBackFromPath: (String, Int?) -> Unit = { _, _ -> },
     onSettingsClick: () -> Unit = {},
-    onSearchClick: () -> Unit = {},
+    onSearchClick: (String?, Int?, Set<Int>) -> Unit = { _, _, _ -> },
     onEvent: (MediaPickerUiEvent) -> Unit = {},
 ) {
     val selectionManager = rememberSelectionManager()
@@ -370,7 +370,19 @@ internal fun MediaPickerScreen(
                                 }
                             }
                         }
-                        IconButton(onClick = onSearchClick) {
+                        IconButton(
+                            onClick = {
+                                if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
+                                    onSearchClick(
+                                        uiState.cloudPath,
+                                        uiState.selectedCloudServerId,
+                                        uiState.selectedCloudServerIds,
+                                    )
+                                } else {
+                                    onSearchClick(null, null, emptySet())
+                                }
+                            },
+                        ) {
                             Icon(
                                 imageVector = NextIcons.Search,
                                 contentDescription = stringResource(id = R.string.search),

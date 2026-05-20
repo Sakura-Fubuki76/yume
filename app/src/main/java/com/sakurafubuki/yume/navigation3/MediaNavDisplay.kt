@@ -63,15 +63,36 @@ fun MediaNavDisplay(
                         }
                     },
                     onSettingsClick = onNavigateToSettings,
-                    onSearchClick = { backStack.pushSingleTop(SearchKey) },
+                    onSearchClick = { cloudPath, cloudServerId, cloudServerIds ->
+                        backStack.pushSingleTop(
+                            searchKey(
+                                cloudPath = cloudPath,
+                                cloudServerId = cloudServerId,
+                                cloudServerIds = cloudServerIds,
+                            ),
+                        )
+                    },
                 )
             }
-            entry<SearchKey> {
+            entry<SearchKey> { key ->
                 SearchRoute(
+                    cloudPath = key.cloudPath,
+                    cloudServerId = key.cloudServerId,
+                    cloudServerIds = key.cloudServerIds,
                     onPlayVideo = context::playVideo,
                     onNavigateUp = { backStack.popOrFalse() },
                     onFolderClick = { folderPath ->
-                        backStack.pushSingleTop(mediaPickerKey(folderId = folderPath))
+                        val cloudTarget = decodeCloudFolderPath(folderPath)
+                        if (cloudTarget != null) {
+                            backStack.pushSingleTop(
+                                mediaPickerKey(
+                                    cloudPath = cloudTarget.second,
+                                    cloudServerId = cloudTarget.first,
+                                ),
+                            )
+                        } else {
+                            backStack.pushSingleTop(mediaPickerKey(folderId = folderPath))
+                        }
                     },
                 )
             }
@@ -96,3 +117,15 @@ private fun Context.playVideos(uris: List<Uri>) {
     }
     startActivity(intent)
 }
+
+private fun decodeCloudFolderPath(path: String): Pair<Int, String>? {
+    if (!path.startsWith(CLOUD_SERVER_PATH_PREFIX)) return null
+    val payload = path.removePrefix(CLOUD_SERVER_PATH_PREFIX)
+    val separator = payload.indexOf(':')
+    if (separator <= 0) return null
+    val serverId = payload.substring(0, separator).toIntOrNull() ?: return null
+    val serverPath = payload.substring(separator + 1).ifBlank { "/" }
+    return serverId to serverPath.normalizePathOrRoot()
+}
+
+private const val CLOUD_SERVER_PATH_PREFIX = "__cloud_server__"
