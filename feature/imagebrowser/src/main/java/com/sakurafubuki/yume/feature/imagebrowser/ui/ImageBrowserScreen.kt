@@ -331,6 +331,7 @@ private fun ImageBrowserScreen(
         currentFolder,
         uiState.preferences.imageBrowserMemoryCachePercent,
         uiState.preferences.imageBrowserThumbnailSizePx,
+        uiState.preferences.imageBrowserPreloadPageCount,
         uiState.preferences.imageCloudDiskCacheEnabled,
         uiState.preferences.imageQuality,
     ) {
@@ -873,7 +874,7 @@ private fun ImageMediaView(
     }
 
     DisposableEffect(rootFolder.path, folderCount, mediaCount, mediaIndexByUri) {
-        ImageViewerStore.ensureTargetBounds = boundsResolver@{ uri ->
+        val boundsResolver: suspend (String) -> Rect? = boundsResolver@{ uri ->
             val mediaIndex = mediaIndexByUri[uri]
             val lastKnownBounds = sharedElementRegistry.getLastKnownBounds(uri)
 
@@ -911,7 +912,12 @@ private fun ImageMediaView(
             val finalBounds = sharedElementRegistry.getBounds(uri) ?: lastKnownBounds
             finalBounds
         }
-        onDispose { }
+        ImageViewerStore.ensureTargetBounds = boundsResolver
+        onDispose {
+            if (ImageViewerStore.ensureTargetBounds === boundsResolver) {
+                ImageViewerStore.ensureTargetBounds = null
+            }
+        }
     }
 
     LazyVerticalStaggeredGrid(
@@ -1339,8 +1345,7 @@ private fun fallbackAspectRatioFor(seed: String): Float {
     return 0.6f + normalized * 0.9f
 }
 
-private fun sharedElementBoundsInWindow(coordinates: LayoutCoordinates): Rect? =
-    runCatching { coordinates.boundsInWindow(clipBounds = false) }.getOrNull()
+private fun sharedElementBoundsInWindow(coordinates: LayoutCoordinates): Rect? = runCatching { coordinates.boundsInWindow(clipBounds = false) }.getOrNull()
 
 @Composable
 private fun ImageThumbnailSkeleton(isError: Boolean = false) {
@@ -2095,8 +2100,31 @@ private fun SharedElementHeroOverlayContent(
     val context = LocalContext.current
     val density = LocalDensity.current
     val displayUri = ImageViewerStore.displayUriFor(transitionImageUri)
+    val thumbnailMaxEdgePx = ImageViewerStore.imageBrowserThumbnailSizePx
     val heroWidth = with(density) { heroRect.width.coerceAtLeast(1f).toDp() }
     val heroHeight = with(density) { heroRect.height.coerceAtLeast(1f).toDp() }
+    val placeholderKey = remember(displayUri, imageQuality, thumbnailMaxEdgePx) {
+        thumbnailMemoryCacheKey(
+            data = displayUri,
+            quality = imageQuality,
+            thumbnailMaxEdgePx = thumbnailMaxEdgePx,
+        )
+    }
+    val overlayImageRequest = remember(context, displayUri, imageQuality, overlayProfile, thumbnailMaxEdgePx, placeholderKey) {
+        buildImageRequest(
+            context = context,
+            data = displayUri,
+            quality = imageQuality,
+            profile = overlayProfile,
+            thumbnailMaxEdgePx = thumbnailMaxEdgePx,
+        )
+            .newBuilder()
+            .placeholderMemoryCacheKey(placeholderKey)
+            .build()
+    }
+    val overlayImageLoader = remember(context, displayUri, localImageLoader) {
+        resolveImageLoader(context, displayUri, localImageLoader)
+    }
     Box(
         modifier = Modifier
             .fillMaxSize(),
@@ -2114,23 +2142,9 @@ private fun SharedElementHeroOverlayContent(
                 }
                 .background(Color.Black),
         ) {
-            val placeholderKey = thumbnailMemoryCacheKey(
-                data = displayUri,
-                quality = imageQuality,
-                thumbnailMaxEdgePx = ImageViewerStore.imageBrowserThumbnailSizePx,
-            )
             AsyncImage(
-                model = buildImageRequest(
-                    context = context,
-                    data = displayUri,
-                    quality = imageQuality,
-                    profile = overlayProfile,
-                    thumbnailMaxEdgePx = ImageViewerStore.imageBrowserThumbnailSizePx,
-                )
-                    .newBuilder()
-                    .placeholderMemoryCacheKey(placeholderKey)
-                    .build(),
-                imageLoader = resolveImageLoader(context, displayUri, localImageLoader),
+                model = overlayImageRequest,
+                imageLoader = overlayImageLoader,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
