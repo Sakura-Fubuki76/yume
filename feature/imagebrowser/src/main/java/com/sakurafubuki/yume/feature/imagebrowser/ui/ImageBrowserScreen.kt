@@ -840,7 +840,6 @@ private fun ImageMediaView(
     val gridState = rememberLazyStaggeredGridState()
     val sharedElementRegistry = LocalSharedElementRegistry.current
 
-    val cellCoordinatesMap = remember { mutableMapOf<String, LayoutCoordinates>() }
     val contentHorizontalPadding = 8.dp
     val itemSpacing = if (preferences.imageLayoutMode == MediaLayoutMode.LIST) 8.dp else 4.dp
     val columns = if (preferences.imageLayoutMode == MediaLayoutMode.LIST) 1 else 2
@@ -857,6 +856,9 @@ private fun ImageMediaView(
             .asSequence()
             .mapIndexed { index, video -> video.uriString to index }
             .toMap()
+    }
+    val cellBoundsMap = remember(rootFolder.path, folderCount, mediaCount, mediaIndexByUri) {
+        mutableMapOf<String, Rect>()
     }
 
     LaunchedEffect(rootFolder.path) {
@@ -878,9 +880,9 @@ private fun ImageMediaView(
             val mediaIndex = mediaIndexByUri[uri]
             val lastKnownBounds = sharedElementRegistry.getLastKnownBounds(uri)
 
-            val coordDirect = cellCoordinatesMap[uri]?.let(::sharedElementBoundsInWindow)
-            if (coordDirect != null) {
-                return@boundsResolver coordDirect
+            val cachedBounds = cellBoundsMap[uri]
+            if (cachedBounds != null) {
+                return@boundsResolver cachedBounds
             }
 
             val directBounds = awaitSharedElementBounds(
@@ -905,9 +907,9 @@ private fun ImageMediaView(
 
             withFrameNanos { }
             withFrameNanos { }
-            val freshCoord = cellCoordinatesMap[uri]?.let(::sharedElementBoundsInWindow)
-            if (freshCoord != null) {
-                return@boundsResolver freshCoord
+            val freshBounds = cellBoundsMap[uri]
+            if (freshBounds != null) {
+                return@boundsResolver freshBounds
             }
             val finalBounds = sharedElementRegistry.getBounds(uri) ?: lastKnownBounds
             finalBounds
@@ -956,7 +958,7 @@ private fun ImageMediaView(
                 localImageLoader = localImageLoader,
                 onClick = { onImageClick(image.uriString.toUri()) },
                 onProbeCloudDimensions = onProbeCloudDimensions,
-                onCoordinatesChanged = { coords -> cellCoordinatesMap[image.uriString] = coords },
+                onBoundsChanged = { bounds -> cellBoundsMap[image.uriString] = bounds },
             )
         }
 
@@ -1240,7 +1242,7 @@ private fun ImageGridCell(
     localImageLoader: ImageLoader,
     onClick: () -> Unit,
     onProbeCloudDimensions: (String, Int, Int) -> Unit,
-    onCoordinatesChanged: ((LayoutCoordinates) -> Unit)? = null,
+    onBoundsChanged: ((Rect) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val sharedElementRegistry = LocalSharedElementRegistry.current
@@ -1284,13 +1286,12 @@ private fun ImageGridCell(
         modifier = Modifier
             .clip(RoundedCornerShape(18.dp))
             .onGloballyPositioned { coordinates ->
-                onCoordinatesChanged?.invoke(coordinates)
+                val bounds = sharedElementBoundsInWindow(coordinates) ?: return@onGloballyPositioned
+                onBoundsChanged?.invoke(bounds)
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastBoundsUpdateMs[0] >= 32L) {
-                    sharedElementBoundsInWindow(coordinates)?.let { bounds ->
-                        sharedElementRegistry.updateBounds(image.uriString, bounds)
-                        lastBoundsUpdateMs[0] = now
-                    }
+                    sharedElementRegistry.updateBounds(image.uriString, bounds)
+                    lastBoundsUpdateMs[0] = now
                 }
             }
             .clickable {
