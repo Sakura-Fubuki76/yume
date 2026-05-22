@@ -1,5 +1,8 @@
 package com.sakurafubuki.yume
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Color
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -19,6 +22,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +34,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat.Type
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.lifecycleScope
@@ -160,6 +167,7 @@ private fun MainScreen(
     val selectedScreen = pageToScreen(pagerState.currentPage)
     val bottomBarVisible = !(selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing)
     val tabSwipeEnabled = bottomBarVisible
+    val imageViewerImmersiveStatusBar = selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing
 
     val transitionEngine = remember { TransitionEngine() }
     val sharedElementRegistry = remember { SharedElementRegistry() }
@@ -175,6 +183,18 @@ private fun MainScreen(
         sharedElementRegistry.clear()
         overlayContentState.clearAllContent()
         transitionEngine.finish()
+    }
+
+    DisposableEffect(context, imageViewerImmersiveStatusBar) {
+        val activity = context.findActivity()
+        if (activity != null) {
+            activity.setStatusBarImmersive(hidden = imageViewerImmersiveStatusBar)
+        }
+        onDispose {
+            if (imageViewerImmersiveStatusBar) {
+                activity?.setStatusBarImmersive(hidden = false)
+            }
+        }
     }
 
     BackHandler {
@@ -262,6 +282,23 @@ private fun screenToPage(screen: Screen): Int = when (screen) {
     Screen.Video -> 0
     Screen.Image -> 1
     Screen.Settings -> 2
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
+private fun Activity.setStatusBarImmersive(hidden: Boolean) {
+    WindowCompat.getInsetsController(window, window.decorView).apply {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (hidden) {
+            hide(Type.statusBars())
+        } else {
+            show(Type.statusBars())
+        }
+    }
 }
 
 @Composable

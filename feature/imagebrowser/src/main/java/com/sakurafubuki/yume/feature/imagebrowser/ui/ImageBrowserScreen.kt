@@ -188,15 +188,16 @@ private const val CLOUD_SERVER_PATH_PREFIX = "__cloud_server__"
 private val DEFAULT_IMAGE_QUALITY = ImageQuality.HIGH
 private val VIEWER_IMAGE_QUALITY = ImageQuality.ORIGINAL
 private val IMAGE_VIEWER_OPEN_ANIMATION = spring<Float>(
-    dampingRatio = 0.92f,
-    stiffness = 450f,
+    dampingRatio = 1f,
+    stiffness = 420f,
 )
 private val IMAGE_VIEWER_CLOSE_ANIMATION = spring<Float>(
-    dampingRatio = 0.95f,
-    stiffness = 600f,
+    dampingRatio = 1f,
+    stiffness = 560f,
 )
 
 private const val BG_ALPHA_CURVE_POWER = 0.4f
+private const val IMAGE_VIEWER_PROGRESS_EPSILON = 0.001f
 
 private enum class CloseTrigger {
     BackPress,
@@ -1677,8 +1678,22 @@ fun ImageViewerRoute(
         transitionEngine.finish()
     }
 
-    fun beginCloseTransition(currentUri: String, destinationBounds: Rect?, startRectOverride: Rect? = null) {
-        val start = startRectOverride ?: imageDisplayBounds(currentUri)
+    fun beginCloseTransition(
+        currentUri: String,
+        destinationBounds: Rect?,
+        startRectOverride: Rect? = null,
+        initialProgress: Float = 0f,
+    ) {
+        val visualStart = startRectOverride ?: imageDisplayBounds(currentUri)
+        val start = if (destinationBounds != null) {
+            projectStartRectForCurrentProgress(
+                current = visualStart,
+                end = destinationBounds,
+                progress = initialProgress,
+            )
+        } else {
+            visualStart
+        }
         isAwaitingRoutePop = false
         isCloseOverlay = true
         transitionImageUri = currentUri
@@ -1732,7 +1747,12 @@ fun ImageViewerRoute(
         if (hasConsumedBackNavigation || isAwaitingRoutePop) return false
         val currentUri = currentImageUri()
         val destinationBounds = resolveDestinationBounds(currentUri)
-        beginCloseTransition(currentUri, destinationBounds, startRectOverride = startRectOverride)
+        beginCloseTransition(
+            currentUri = currentUri,
+            destinationBounds = destinationBounds,
+            startRectOverride = startRectOverride,
+            initialProgress = initialProgress,
+        )
         showHeroOverlay = true
         transitionEngine.start(
             type = if (trigger == CloseTrigger.PredictiveBack) TransitionType.PredictiveBack else TransitionType.SharedElement,
@@ -1904,6 +1924,7 @@ fun ImageViewerRoute(
                     currentUri = currentUri,
                     destinationBounds = syncBounds,
                     startRectOverride = currentRectOverride,
+                    initialProgress = releaseProgress,
                 )
                 showHeroOverlay = true
                 startSharedElementCloseAnimation(releaseProgress)
@@ -2041,6 +2062,7 @@ fun ImageViewerRoute(
                                     currentUri = currentUri,
                                     destinationBounds = resolvedBounds,
                                     startRectOverride = currentRect,
+                                    initialProgress = capturedProgress,
                                 )
                                 showHeroOverlay = true
                                 startSharedElementCloseAnimation(capturedProgress)
@@ -2153,15 +2175,51 @@ private fun interpolateRectWithArc(start: Rect, end: Rect, fraction: Float): Rec
 
 private fun smoothArcCenterY(start: Rect, end: Rect, fraction: Float): Float {
     val linearY = lerp(start.center.y, end.center.y, fraction)
-    val distance = abs(end.center.y - start.center.y)
-    val sizeDelta = abs(end.height - start.height)
-    val arcHeight = max(
-        IMAGE_VIEWER_ARC_MIN_PX,
-        min(IMAGE_VIEWER_ARC_MAX_PX, distance * 0.28f + sizeDelta * 0.08f),
+    val arcHeight = sharedElementArcHeight(
+        distance = abs(end.center.y - start.center.y),
+        sizeDelta = abs(end.height - start.height),
     )
-    val t = fraction.coerceIn(0f, 1f)
-    val bump = 16f * t * t * (1f - t) * (1f - t)
+    val bump = sharedElementArcBump(fraction)
     return linearY - arcHeight * bump
+}
+
+private fun projectStartRectForCurrentProgress(current: Rect, end: Rect, progress: Float): Rect {
+    val safeProgress = progress.coerceIn(0f, 1f)
+    if (safeProgress <= IMAGE_VIEWER_PROGRESS_EPSILON) return current
+    val remainingProgress = (1f - safeProgress).coerceAtLeast(IMAGE_VIEWER_PROGRESS_EPSILON)
+    val startWidth = projectStartValue(current.width, end.width, safeProgress, remainingProgress)
+        .coerceAtLeast(1f)
+    val startHeight = projectStartValue(current.height, end.height, safeProgress, remainingProgress)
+        .coerceAtLeast(1f)
+    val startCenterX = projectStartValue(current.center.x, end.center.x, safeProgress, remainingProgress)
+    val arcBump = sharedElementArcBump(safeProgress)
+    var startCenterY = projectStartValue(current.center.y, end.center.y, safeProgress, remainingProgress)
+    repeat(4) {
+        val arcHeight = sharedElementArcHeight(
+            distance = abs(end.center.y - startCenterY),
+            sizeDelta = abs(end.height - startHeight),
+        )
+        startCenterY = (current.center.y - end.center.y * safeProgress + arcHeight * arcBump) / remainingProgress
+    }
+    return Rect(
+        left = startCenterX - startWidth / 2f,
+        top = startCenterY - startHeight / 2f,
+        right = startCenterX + startWidth / 2f,
+        bottom = startCenterY + startHeight / 2f,
+    )
+}
+
+private fun projectStartValue(current: Float, end: Float, progress: Float, remainingProgress: Float): Float =
+    (current - end * progress) / remainingProgress
+
+private fun sharedElementArcHeight(distance: Float, sizeDelta: Float): Float = max(
+    IMAGE_VIEWER_ARC_MIN_PX,
+    min(IMAGE_VIEWER_ARC_MAX_PX, distance * 0.28f + sizeDelta * 0.08f),
+)
+
+private fun sharedElementArcBump(fraction: Float): Float {
+    val t = fraction.coerceIn(0f, 1f)
+    return 16f * t * t * (1f - t) * (1f - t)
 }
 
 private fun fittedImageRect(
