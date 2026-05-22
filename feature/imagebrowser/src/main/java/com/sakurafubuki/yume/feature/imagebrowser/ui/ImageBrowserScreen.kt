@@ -75,6 +75,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,6 +134,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -841,21 +843,38 @@ private fun ImageMediaView(
     val contentHorizontalPadding = 8.dp
     val itemSpacing = if (preferences.imageLayoutMode == MediaLayoutMode.LIST) 8.dp else 4.dp
     val columns = if (preferences.imageLayoutMode == MediaLayoutMode.LIST) 1 else 2
+    val folderCount = rootFolder.folderList.size
+    val mediaCount = rootFolder.mediaList.size
+    val totalItems = folderCount + mediaCount
+    val mediaIndexByUri = remember(
+        rootFolder.path,
+        mediaCount,
+        rootFolder.mediaList.firstOrNull()?.uriString,
+        rootFolder.mediaList.lastOrNull()?.uriString,
+    ) {
+        rootFolder.mediaList
+            .asSequence()
+            .mapIndexed { index, video -> video.uriString to index }
+            .toMap()
+    }
 
     LaunchedEffect(rootFolder.path) {
         gridState.scrollToItem(0)
     }
 
-    LaunchedEffect(gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index, cloudHasMore, cloudLoadingMore) {
-        val lastVisibleIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-        val totalItems = rootFolder.folderList.size + rootFolder.mediaList.size
-        if (totalItems > 0 && lastVisibleIndex >= totalItems - 5 && cloudHasMore && !cloudLoadingMore) {
-            onLoadMore()
-        }
+    LaunchedEffect(gridState, totalItems, cloudHasMore, cloudLoadingMore) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .distinctUntilChanged()
+            .collect { lastVisibleIndex ->
+                if (totalItems > 0 && lastVisibleIndex >= totalItems - 5 && cloudHasMore && !cloudLoadingMore) {
+                    onLoadMore()
+                }
+            }
     }
 
-    DisposableEffect(rootFolder.path, rootFolder.mediaList, rootFolder.folderList) {
+    DisposableEffect(rootFolder.path, folderCount, mediaCount, mediaIndexByUri) {
         ImageViewerStore.ensureTargetBounds = boundsResolver@{ uri ->
+            val mediaIndex = mediaIndexByUri[uri]
             val lastKnownBounds = sharedElementRegistry.getLastKnownBounds(uri)
 
             val coordDirect = cellCoordinatesMap[uri]?.let { coords ->
@@ -872,12 +891,11 @@ private fun ImageMediaView(
             )
             if (directBounds != null) return@boundsResolver directBounds
 
-            val mediaIndex = rootFolder.mediaList.indexOfFirst { it.uriString == uri }
-            if (mediaIndex < 0) {
+            if (mediaIndex == null) {
                 return@boundsResolver lastKnownBounds
             }
 
-            val targetIndex = imageGridItemIndex(rootFolder, mediaIndex)
+            val targetIndex = folderCount + mediaIndex
             try {
                 val viewportHeight = gridState.layoutInfo.viewportSize.height
                 val centerOffset = if (viewportHeight > 0) -(viewportHeight / 3) else -300
@@ -897,7 +915,6 @@ private fun ImageMediaView(
             val finalBounds = sharedElementRegistry.getBounds(uri) ?: lastKnownBounds
             finalBounds
         }
-
         onDispose { }
     }
 
@@ -1155,10 +1172,28 @@ private fun FolderCoverImage(
     val context = LocalContext.current
     val coverDisplayUri = coverMedia.displayUriString()
     val isLocalCover = coverDisplayUri.startsWith("file://")
-    val coverData: Any = if (isLocalCover) {
-        File(coverDisplayUri.toUri().path ?: coverDisplayUri)
-    } else {
-        coverDisplayUri
+    val coverData: Any = remember(coverDisplayUri, isLocalCover) {
+        if (isLocalCover) {
+            File(coverDisplayUri.toUri().path ?: coverDisplayUri)
+        } else {
+            coverDisplayUri
+        }
+    }
+    val coverImageRequest = remember(context, coverData, imageQuality, thumbnailMaxEdgePx) {
+        buildImageRequest(
+            context = context,
+            data = coverData,
+            quality = imageQuality,
+            profile = ImageRequestProfile.THUMBNAIL,
+            thumbnailMaxEdgePx = thumbnailMaxEdgePx,
+        )
+    }
+    val coverImageLoader = remember(context, isLocalCover, localImageLoader) {
+        if (isLocalCover) {
+            localImageLoader
+        } else {
+            SingletonImageLoader.get(context)
+        }
     }
     var coverLoadState by remember(coverDisplayUri) {
         mutableIntStateOf(ImageCellLoadState.LOADING)
@@ -1169,14 +1204,8 @@ private fun FolderCoverImage(
         label = "folderCoverFadeIn",
     )
     AsyncImage(
-        model = buildImageRequest(
-            context = context,
-            data = coverData,
-            quality = imageQuality,
-            profile = ImageRequestProfile.THUMBNAIL,
-            thumbnailMaxEdgePx = thumbnailMaxEdgePx,
-        ),
-        imageLoader = if (isLocalCover) localImageLoader else SingletonImageLoader.get(context),
+        model = coverImageRequest,
+        imageLoader = coverImageLoader,
         contentDescription = contentDescription,
         contentScale = ContentScale.Crop,
         modifier = modifier.graphicsLayer { alpha = coverFadeInAlpha },
@@ -1232,6 +1261,18 @@ private fun ImageGridCell(
             fallbackAspectRatioFor(image.uriString)
         }
     }
+    val imageRequest = remember(context, displayUri, imageQuality, thumbnailMaxEdgePx) {
+        buildImageRequest(
+            context = context,
+            data = displayUri,
+            quality = imageQuality,
+            profile = ImageRequestProfile.THUMBNAIL,
+            thumbnailMaxEdgePx = thumbnailMaxEdgePx,
+        )
+    }
+    val imageLoader = remember(context, displayUri, localImageLoader) {
+        resolveImageLoader(context, displayUri, localImageLoader)
+    }
     val fadeInAlpha by animateFloatAsState(
         targetValue = if (loadState == ImageCellLoadState.SUCCESS) 1f else 0f,
         animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
@@ -1259,14 +1300,8 @@ private fun ImageGridCell(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             AsyncImage(
-                model = buildImageRequest(
-                    context = context,
-                    data = displayUri,
-                    quality = imageQuality,
-                    profile = ImageRequestProfile.THUMBNAIL,
-                    thumbnailMaxEdgePx = thumbnailMaxEdgePx,
-                ),
-                imageLoader = resolveImageLoader(context, displayUri, localImageLoader),
+                model = imageRequest,
+                imageLoader = imageLoader,
                 contentDescription = image.nameWithExtension,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
