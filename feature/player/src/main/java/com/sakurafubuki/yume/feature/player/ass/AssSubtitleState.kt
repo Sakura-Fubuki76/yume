@@ -15,6 +15,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.Player
 import com.jakewharton.disklrucache.DiskLruCache
 import com.sakurafubuki.yume.core.common.Logger
+import com.sakurafubuki.yume.feature.player.extensions.getSubtitleAdjustedPositionMs
 import com.sakurafubuki.yume.feature.player.ui.SubtitleConfiguration
 import java.io.File
 import java.security.MessageDigest
@@ -179,11 +180,11 @@ fun rememberAssSubtitleState(
         if ((!state.isLoaded && !embeddedActive) || !state.fontsReady) return@LaunchedEffect
 
         val capturedGen = state.loadGeneration
-        state.renderFrame(player.currentPosition)
+        state.renderFrame(player.getSubtitleAdjustedPositionMs())
 
         while (true) {
             if (state.loadGeneration != capturedGen) return@LaunchedEffect
-            state.renderFrame(player.currentPosition)
+            state.renderFrame(player.getSubtitleAdjustedPositionMs())
             delay(16L)
         }
     }

@@ -81,6 +81,7 @@ import com.sakurafubuki.yume.feature.player.effect.Anime4KUpscaleEffect
 import com.sakurafubuki.yume.feature.player.effect.DebandEffect
 import com.sakurafubuki.yume.feature.player.effect.DitherEffect
 import com.sakurafubuki.yume.feature.player.extensions.addAdditionalSubtitleConfiguration
+import com.sakurafubuki.yume.feature.player.extensions.applySubtitleTimingToRenderers
 import com.sakurafubuki.yume.feature.player.extensions.audioTrackIndex
 import com.sakurafubuki.yume.feature.player.extensions.copy
 import com.sakurafubuki.yume.feature.player.extensions.getManuallySelectedTrackIndex
@@ -180,6 +181,7 @@ class PlayerService : MediaSessionService() {
                     setPlaybackSpeed(metadata.playbackSpeed ?: playerPreferences.defaultPlaybackSpeed)
                     playerSpecificSubtitleDelayMilliseconds = metadata.subtitleDelayMilliseconds ?: 0L
                     playerSpecificSubtitleSpeed = metadata.subtitleSpeed ?: 1f
+                    applySubtitleTimingToRenderers()
                 }
 
                 metadata.positionMs?.takeIf { playerPreferences.resume == Resume.YES }?.let {
@@ -250,6 +252,11 @@ class PlayerService : MediaSessionService() {
             if (!isMediaItemReady && tracks.groups.isNotEmpty()) {
                 isMediaItemReady = true
 
+                mediaSession?.player?.run {
+                    playerSpecificSubtitleDelayMilliseconds = mediaMetadata.subtitleDelayMilliseconds ?: 0L
+                    playerSpecificSubtitleSpeed = mediaMetadata.subtitleSpeed ?: 1f
+                    applySubtitleTimingToRenderers()
+                }
                 if (!playerPreferences.rememberSelections) return
                 mediaSession?.player?.mediaMetadata?.audioTrackIndex?.let {
                     mediaSession?.player?.switchTrack(C.TRACK_TYPE_AUDIO, it)

@@ -136,10 +136,38 @@ fun MediaPlayerScreen(
     }
     player ?: return
     val metadataState = rememberMetadataState(player)
-    LaunchedEffect(player.currentMediaItem?.mediaId) {
-        val mediaId = player.currentMediaItem?.mediaId ?: return@LaunchedEffect
-        val autoUri = AssSubtitleState.autoSelectAssByMediaId.remove(mediaId)
-        if (autoUri != null) selectedAssUri = autoUri
+    var currentMediaId by remember(player) { mutableStateOf(player.currentMediaItem?.mediaId) }
+    DisposableEffect(player) {
+        fun updateCurrentMediaId() {
+            currentMediaId = player.currentMediaItem?.mediaId
+        }
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                currentMediaId = mediaItem?.mediaId
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                updateCurrentMediaId()
+            }
+        }
+        player.addListener(listener)
+        updateCurrentMediaId()
+        onDispose {
+            player.removeListener(listener)
+        }
+    }
+    LaunchedEffect(currentMediaId) {
+        val mediaId = currentMediaId
+        selectedAssUri = null
+        if (mediaId.isNullOrBlank()) return@LaunchedEffect
+        repeat(20) {
+            val autoUri = AssSubtitleState.autoSelectAssByMediaId.remove(mediaId)
+            if (autoUri != null) {
+                selectedAssUri = autoUri
+                return@LaunchedEffect
+            }
+            delay(100L)
+        }
     }
     val mediaPresentationState = rememberMediaPresentationState(player)
     val controlsVisibilityState = rememberControlsVisibilityState(

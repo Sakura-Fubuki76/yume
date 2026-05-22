@@ -10,6 +10,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaController
 import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.feature.player.service.setMediaControllerIsScrubbingModeEnabled
+import io.github.sakurafubuki.yume.nativelib.renderer.OffsetRenderer
+import kotlin.math.roundToLong
 
 fun Player.switchTrack(trackType: @C.TrackType Int, trackIndex: Int) {
     val trackTypeText = when (trackType) {
@@ -85,14 +87,30 @@ fun Player.setIsScrubbingModeEnabled(enabled: Boolean) {
 private val subtitleDelayStore = java.util.Collections.synchronizedMap(java.util.WeakHashMap<Player, Long>())
 private val subtitleSpeedStore = java.util.Collections.synchronizedMap(java.util.WeakHashMap<Player, Float>())
 
+@OptIn(UnstableApi::class)
 var Player.subtitleDelayMilliseconds: Long
     get() = subtitleDelayStore[this] ?: 0L
     set(value) {
         subtitleDelayStore[this] = value
+        applySubtitleTimingToRenderers()
     }
 
+@OptIn(UnstableApi::class)
 var Player.subtitleSpeed: Float
     get() = subtitleSpeedStore[this] ?: 1f
     set(value) {
-        subtitleSpeedStore[this] = value
+        subtitleSpeedStore[this] = value.coerceIn(0.1f, 10f)
+        applySubtitleTimingToRenderers()
     }
+
+@OptIn(UnstableApi::class)
+fun Player.applySubtitleTimingToRenderers() {
+    if (this !is ExoPlayer) return
+    for (index in 0 until rendererCount) {
+        val renderer = getRenderer(index) as? OffsetRenderer ?: continue
+        renderer.syncOffsetMilliseconds = subtitleDelayMilliseconds
+        renderer.syncSpeedMultiplier = subtitleSpeed
+    }
+}
+
+fun Player.getSubtitleAdjustedPositionMs(): Long = (currentPosition * subtitleSpeed).roundToLong() - subtitleDelayMilliseconds

@@ -78,7 +78,13 @@ class SubtitleOptionsState(
         updateSubtitleDelayMilliseconds()
         updateSubtitleSpeed()
         player.listen { events ->
-            if (events.containsAny(Player.EVENT_TRACKS_CHANGED, Player.EVENT_CUES)) {
+            if (events.containsAny(
+                    Player.EVENT_TRACKS_CHANGED,
+                    Player.EVENT_CUES,
+                    Player.EVENT_MEDIA_ITEM_TRANSITION,
+                    Player.EVENT_MEDIA_METADATA_CHANGED,
+                )
+            ) {
                 scope.launch {
                     updateSubtitleDelayMilliseconds()
                     updateSubtitleSpeed()

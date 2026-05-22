@@ -81,7 +81,7 @@ class AssSubtitleDecoderFactory : SubtitleDecoderFactory {
     override fun supportsFormat(format: Format): Boolean {
         val mime = format.sampleMimeType ?: ""
         if (mime.contains("ass", ignoreCase = true) || mime.contains("ssa", ignoreCase = true)) {
-            return false
+            return true
         }
         return defaultFactory.supportsFormat(format)
     }

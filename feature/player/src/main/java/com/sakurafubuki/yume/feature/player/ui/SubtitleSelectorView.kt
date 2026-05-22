@@ -90,6 +90,7 @@ fun BoxScope.SubtitleSelectorView(
                     selected = track.isSelected,
                     text = track.mediaTrackGroup.getName(C.TRACK_TYPE_TEXT, index),
                     onClick = {
+                        onAssTrackSelected("")
                         subtitleTracksState.switchTrack(index)
                         onDismiss()
                     },
@@ -101,6 +102,7 @@ fun BoxScope.SubtitleSelectorView(
                     selected = uri == selectedAssUri,
                     text = name,
                     onClick = {
+                        subtitleTracksState.switchTrack(-1)
                         onAssTrackSelected(uri.toString())
                         onDismiss()
                     },
