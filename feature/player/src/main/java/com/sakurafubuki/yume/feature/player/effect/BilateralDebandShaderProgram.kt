@@ -23,6 +23,11 @@ class BilateralDebandShaderProgram(
     private var textureWidth = 0
     private var textureHeight = 0
     private var shaderInitFailed = false
+    private val framebufferBinding = IntArray(1)
+    private val viewport = IntArray(4)
+    private val texelSize = FloatArray(2)
+    private val textureScratch = IntArray(1)
+    private val framebufferScratch = IntArray(1)
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
         passThroughProgram = runCatching {
@@ -66,7 +71,9 @@ class BilateralDebandShaderProgram(
             GLES30.glViewport(0, 0, width, height)
             blurProgram!!.use()
             blurProgram!!.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-            blurProgram!!.setFloatsUniform("uTexelSize", floatArrayOf(1f / width, 1f / height))
+            texelSize[0] = 1f / width
+            texelSize[1] = 1f / height
+            blurProgram!!.setFloatsUniform("uTexelSize", texelSize)
             blurProgram!!.setFloatUniform("uSigmaSpace", radius / 3f)
             blurProgram!!.setFloatUniform("uSigmaColor", threshold * 2f)
             blurProgram!!.bindAttributesAndUniforms()
@@ -99,8 +106,10 @@ class BilateralDebandShaderProgram(
         debandProgram = null
         passThroughProgram = null
         if (intermediateFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(intermediateFboId), 0)
-            GLES30.glDeleteTextures(1, intArrayOf(intermediateTextureId), 0)
+            framebufferScratch[0] = intermediateFboId
+            textureScratch[0] = intermediateTextureId
+            GLES30.glDeleteFramebuffers(1, framebufferScratch, 0)
+            GLES30.glDeleteTextures(1, textureScratch, 0)
             intermediateFboId = 0
             intermediateTextureId = 0
         }
@@ -125,8 +134,10 @@ class BilateralDebandShaderProgram(
     private fun ensureIntermediateTexture(width: Int, height: Int) {
         if (textureWidth == width && textureHeight == height) return
         if (intermediateFboId != 0) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(intermediateFboId), 0)
-            GLES30.glDeleteTextures(1, intArrayOf(intermediateTextureId), 0)
+            framebufferScratch[0] = intermediateFboId
+            textureScratch[0] = intermediateTextureId
+            GLES30.glDeleteFramebuffers(1, framebufferScratch, 0)
+            GLES30.glDeleteTextures(1, textureScratch, 0)
         }
 
         val texIds = IntArray(1)
@@ -156,8 +167,10 @@ class BilateralDebandShaderProgram(
         val fboStatus = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (fboStatus != GLES30.GL_FRAMEBUFFER_COMPLETE) {
             Logger.w(TAG, "Intermediate FBO incomplete: 0x${Integer.toHexString(fboStatus)}")
-            GLES30.glDeleteFramebuffers(1, intArrayOf(intermediateFboId), 0)
-            GLES30.glDeleteTextures(1, intArrayOf(intermediateTextureId), 0)
+            framebufferScratch[0] = intermediateFboId
+            textureScratch[0] = intermediateTextureId
+            GLES30.glDeleteFramebuffers(1, framebufferScratch, 0)
+            GLES30.glDeleteTextures(1, textureScratch, 0)
             intermediateFboId = 0
             intermediateTextureId = 0
             shaderInitFailed = true
@@ -167,12 +180,14 @@ class BilateralDebandShaderProgram(
         textureHeight = height
     }
 
-    private fun currentFramebuffer(): Int = IntArray(1).also {
-        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, it, 0)
-    }[0]
+    private fun currentFramebuffer(): Int {
+        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, framebufferBinding, 0)
+        return framebufferBinding[0]
+    }
 
-    private fun currentViewport(): IntArray = IntArray(4).also {
-        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, it, 0)
+    private fun currentViewport(): IntArray {
+        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, viewport, 0)
+        return viewport
     }
 
     private fun checkGlError(tag: String) {

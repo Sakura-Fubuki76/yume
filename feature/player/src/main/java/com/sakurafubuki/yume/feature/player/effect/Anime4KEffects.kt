@@ -74,7 +74,9 @@ private class Anime4KClampHighlightsShaderProgram(
             GLES30.glViewport(0, 0, width, height)
             program!!.use()
             program!!.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
-            program!!.setFloatsUniform("uTexelSize", floatArrayOf(1f / width, 1f / height))
+            texelSizeScratch[0] = 1f / width
+            texelSizeScratch[1] = 1f / height
+            program!!.setFloatsUniform("uTexelSize", texelSizeScratch)
             program!!.bindAttributesAndUniforms()
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             checkGlError("Anime4K clamp")
@@ -101,13 +103,13 @@ private fun setupVertexBuffers(program: GlProgram) {
 }
 
 private fun currentFramebuffer(): Int {
-    val bindingFbo = IntArray(1)
-    GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, bindingFbo, 0)
-    return bindingFbo[0]
+    GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, framebufferBindingScratch, 0)
+    return framebufferBindingScratch[0]
 }
 
-private fun currentViewport(): IntArray = IntArray(4).also {
-    GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, it, 0)
+private fun currentViewport(): IntArray {
+    GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, viewportScratch, 0)
+    return viewportScratch
 }
 
 @OptIn(UnstableApi::class)
@@ -130,6 +132,9 @@ private fun checkGlError(tag: String) {
 }
 
 private const val TAG = "Anime4K"
+private val framebufferBindingScratch = IntArray(1)
+private val viewportScratch = IntArray(4)
+private val texelSizeScratch = FloatArray(2)
 private val FRAME_POSITION_DATA = floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
 private val TEX_COORD_DATA = floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)
 

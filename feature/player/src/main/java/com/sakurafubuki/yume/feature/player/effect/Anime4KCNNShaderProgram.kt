@@ -27,11 +27,22 @@ class Anime4KCNNShaderProgram(
     private var workHeight = 0
     private var scaleFactor = 1
 
-    private data class FboTex(var fbo: Int = 0, var tex: Int = 0)
+    private data class FboTex(
+        var fbo: Int = 0,
+        var tex: Int = 0,
+        var width: Int = 0,
+        var height: Int = 0,
+        var useHalfFloat: Boolean = true,
+    )
 
-    private val intermediates = mutableMapOf<String, FboTex>()
+    private val intermediates = mutableListOf<FboTex>()
+    private val framebufferBinding = IntArray(1)
+    private val viewport = IntArray(4)
+    private val deleteScratch = IntArray(1)
+    private val inputTexelSize = FloatArray(2)
 
     override fun configure(inputWidth: Int, inputHeight: Int): Size {
+        releaseIntermediates()
         this.inputWidth = inputWidth
         this.inputHeight = inputHeight
         workWidth = (inputWidth * downscaleFactor).toInt().coerceAtLeast(1)
@@ -47,8 +58,13 @@ class Anime4KCNNShaderProgram(
             val source = readAsset(assetPath)
             scaleFactor = parseScaleFactor(source)
             val parsed = parseCnnSource(source)
-            layers = parsed.map { compileLayer(it) }
-            Logger.i(TAG, "CNN input=${inputWidth}x$inputHeight work=${workWidth}x$workHeight scale=${scaleFactor}x compiled ${layers.size} layers from $assetPath")
+            val layerPlans = buildLayerPlans(parsed)
+            layers = layerPlans.map { compileLayer(it) }
+            Logger.i(
+                TAG,
+                "CNN input=${inputWidth}x$inputHeight work=${workWidth}x$workHeight scale=${scaleFactor}x " +
+                    "compiled ${layers.size} layers using ${intermediates.size} intermediate slots from $assetPath",
+            )
         } catch (e: Exception) {
             Logger.w(TAG, "CNN init failed for $assetPath, using pass-through", e)
             shaderInitFailed = true
@@ -72,14 +88,12 @@ class Anime4KCNNShaderProgram(
                 return
             }
 
-            // Output texelSize always based on full-res input so CNN kernels sample source at native precision
-            val inputTexelSize = floatArrayOf(1f / inputWidth, 1f / inputHeight)
-
-            val textureRegistry = mutableMapOf("MAIN" to inputTexId)
+            inputTexelSize[0] = 1f / inputWidth
+            inputTexelSize[1] = 1f / inputHeight
 
             for ((index, layer) in layers.withIndex()) {
                 val isLast = index == layers.lastIndex
-                val targetFbo = if (isLast) outputFbo else ensureIntermediate(layer.outputName, workWidth, workHeight)
+                val targetFbo = if (isLast) outputFbo else ensureIntermediate(layer.outputSlot, workWidth, workHeight)
 
                 val layerW = if (isLast) vw else workWidth
                 val layerH = if (isLast) vh else workHeight
@@ -87,10 +101,12 @@ class Anime4KCNNShaderProgram(
                 GLES30.glViewport(0, 0, layerW, layerH)
                 layer.program.use()
 
-                for ((unit, texName) in layer.inputNames.withIndex()) {
-                    val texId = textureRegistry[texName]
-                        ?: intermediates[texName]?.tex
-                        ?: inputTexId
+                for ((unit, slot) in layer.inputSlots.withIndex()) {
+                    val texId = if (slot == MAIN_TEXTURE_SLOT) {
+                        inputTexId
+                    } else {
+                        intermediates.getOrNull(slot)?.tex?.takeIf { it != 0 } ?: inputTexId
+                    }
                     layer.program.setSamplerTexIdUniform("uInput$unit", texId, unit)
                 }
                 if (layer.needsTexelSize) {
@@ -99,23 +115,6 @@ class Anime4KCNNShaderProgram(
                 layer.program.bindAttributesAndUniforms()
                 GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
                 checkGlError("CNN layer ${index + 1}")
-
-                if (!isLast) {
-                    val fboTex = intermediates[layer.outputName]!!
-                    textureRegistry[layer.outputName] = fboTex.tex
-                }
-
-                if (!isLast) {
-                    val neededLater = layers.drop(index + 1).flatMap { it.inputNames }.toSet()
-                    val toRemove = intermediates.keys.filter { it !in neededLater && it != layer.outputName }
-                    for (name in toRemove) {
-                        intermediates[name]?.let { ft ->
-                            GLES30.glDeleteFramebuffers(1, intArrayOf(ft.fbo), 0)
-                            GLES30.glDeleteTextures(1, intArrayOf(ft.tex), 0)
-                        }
-                        intermediates.remove(name)
-                    }
-                }
             }
         } catch (e: Exception) {
             Logger.w(TAG, "CNN drawFrame failed, disabling", e)
@@ -134,31 +133,47 @@ class Anime4KCNNShaderProgram(
     }
 
     private fun releaseIntermediates() {
-        for ((_, ft) in intermediates) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(ft.fbo), 0)
-            GLES30.glDeleteTextures(1, intArrayOf(ft.tex), 0)
+        for (ft in intermediates) {
+            deleteFboTex(ft)
         }
         intermediates.clear()
     }
 
-    private fun ensureIntermediate(name: String, w: Int, h: Int): Int {
-        intermediates[name]?.let { return it.fbo }
+    private fun ensureIntermediate(slot: Int, w: Int, h: Int): Int {
+        val existing = intermediates[slot]
+        if (existing.fbo != 0 && existing.width == w && existing.height == h) return existing.fbo
+        deleteFboTex(existing)
 
         val result = tryCreateFboTex(w, h, useHalfFloat = true)
         if (result != null) {
-            intermediates[name] = result
+            intermediates[slot] = result
             return result.fbo
         }
-        Logger.w(TAG, "RGBA16F FBO failed, falling back to RGBA8 for $name")
+        Logger.w(TAG, "RGBA16F FBO failed, falling back to RGBA8 for slot $slot")
 
         val fallbackResult = tryCreateFboTex(w, h, useHalfFloat = false)
         if (fallbackResult != null) {
-            intermediates[name] = fallbackResult
+            intermediates[slot] = fallbackResult
             return fallbackResult.fbo
         }
-        Logger.e(TAG, "Failed to create intermediate FBO for $name")
+        Logger.e(TAG, "Failed to create intermediate FBO for slot $slot")
         shaderInitFailed = true
         return 0
+    }
+
+    private fun deleteFboTex(ft: FboTex) {
+        if (ft.fbo != 0) {
+            deleteScratch[0] = ft.fbo
+            GLES30.glDeleteFramebuffers(1, deleteScratch, 0)
+            ft.fbo = 0
+        }
+        if (ft.tex != 0) {
+            deleteScratch[0] = ft.tex
+            GLES30.glDeleteTextures(1, deleteScratch, 0)
+            ft.tex = 0
+        }
+        ft.width = 0
+        ft.height = 0
     }
 
     private fun tryCreateFboTex(w: Int, h: Int, useHalfFloat: Boolean): FboTex? {
@@ -179,7 +194,8 @@ class Anime4KCNNShaderProgram(
             )
         }
         if (GLES30.glGetError() != GLES30.GL_NO_ERROR) {
-            GLES30.glDeleteTextures(1, intArrayOf(tex), 0)
+            deleteScratch[0] = tex
+            GLES30.glDeleteTextures(1, deleteScratch, 0)
             return null
         }
 
@@ -201,11 +217,13 @@ class Anime4KCNNShaderProgram(
         )
         val status = GLES30.glCheckFramebufferStatus(GLES30.GL_FRAMEBUFFER)
         if (status != GLES30.GL_FRAMEBUFFER_COMPLETE) {
-            GLES30.glDeleteFramebuffers(1, intArrayOf(fbo), 0)
-            GLES30.glDeleteTextures(1, intArrayOf(tex), 0)
+            deleteScratch[0] = fbo
+            GLES30.glDeleteFramebuffers(1, deleteScratch, 0)
+            deleteScratch[0] = tex
+            GLES30.glDeleteTextures(1, deleteScratch, 0)
             return null
         }
-        return FboTex(fbo, tex)
+        return FboTex(fbo, tex, w, h, useHalfFloat)
     }
 
     private data class ParsedLayer(
@@ -289,17 +307,66 @@ class Anime4KCNNShaderProgram(
 
     private data class CompiledLayer(
         val program: GlProgram,
-        val outputName: String,
-        val inputNames: List<String>,
+        val outputSlot: Int,
+        val inputSlots: IntArray,
         val needsTexelSize: Boolean,
     )
 
-    private fun compileLayer(parsed: ParsedLayer): CompiledLayer {
-        val needsTexelSize = parsed.macros.any { it.contains("x_off") }
-        val fragShader = buildFragmentShader(parsed)
+    private data class LayerPlan(
+        val parsed: ParsedLayer,
+        val outputSlot: Int,
+        val inputSlots: IntArray,
+    )
+
+    private fun buildLayerPlans(parsedLayers: List<ParsedLayer>): List<LayerPlan> {
+        val lastUseByName = mutableMapOf<String, Int>()
+        parsedLayers.forEachIndexed { index, layer ->
+            for (name in layer.inputNames) {
+                if (name != MAIN_TEXTURE_NAME) lastUseByName[name] = index
+            }
+        }
+
+        val activeSlotsByName = mutableMapOf<String, Int>()
+        val freeSlots = ArrayDeque<Int>()
+        val plans = ArrayList<LayerPlan>(parsedLayers.size)
+
+        parsedLayers.forEachIndexed { index, layer ->
+            val inputSlots = IntArray(layer.inputNames.size) { inputIndex ->
+                activeSlotsByName[layer.inputNames[inputIndex]] ?: MAIN_TEXTURE_SLOT
+            }
+            val outputSlot = if (layer.isFinal) MAIN_TEXTURE_SLOT else allocateIntermediateSlot(freeSlots)
+            plans += LayerPlan(layer, outputSlot, inputSlots)
+
+            if (!layer.isFinal) {
+                activeSlotsByName[layer.outputName] = outputSlot
+            }
+
+            val reusableNames = activeSlotsByName
+                .filter { (name, _) -> lastUseByName[name]?.let { it <= index } ?: true }
+                .keys
+                .toList()
+            for (name in reusableNames) {
+                val slot = activeSlotsByName.remove(name) ?: continue
+                freeSlots.addLast(slot)
+            }
+        }
+
+        return plans
+    }
+
+    private fun allocateIntermediateSlot(freeSlots: ArrayDeque<Int>): Int {
+        if (freeSlots.isNotEmpty()) return freeSlots.removeFirst()
+        val slot = intermediates.size
+        intermediates += FboTex()
+        return slot
+    }
+
+    private fun compileLayer(plan: LayerPlan): CompiledLayer {
+        val needsTexelSize = plan.parsed.macros.any { it.contains("x_off") }
+        val fragShader = buildFragmentShader(plan.parsed)
         val program = GlProgram(VERTEX_SHADER, fragShader)
         setupVertexBuffers(program)
-        return CompiledLayer(program, parsed.outputName, parsed.inputNames, needsTexelSize)
+        return CompiledLayer(program, plan.outputSlot, plan.inputSlots, needsTexelSize)
     }
 
     private fun buildFragmentShader(layer: ParsedLayer): String {
@@ -418,12 +485,14 @@ class Anime4KCNNShaderProgram(
         program.setBufferAttribute("aTexSamplingCoord", TEX_COORD_DATA, 2)
     }
 
-    private fun currentFramebuffer(): Int = IntArray(1).also {
-        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, it, 0)
-    }[0]
+    private fun currentFramebuffer(): Int {
+        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, framebufferBinding, 0)
+        return framebufferBinding[0]
+    }
 
-    private fun currentViewport(): IntArray = IntArray(4).also {
-        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, it, 0)
+    private fun currentViewport(): IntArray {
+        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, viewport, 0)
+        return viewport
     }
 
     private fun drawPassThrough(inputTexId: Int, outputFbo: Int) {
@@ -446,6 +515,8 @@ class Anime4KCNNShaderProgram(
 
     private companion object {
         private const val TAG = "Anime4KCNN"
+        private const val MAIN_TEXTURE_NAME = "MAIN"
+        private const val MAIN_TEXTURE_SLOT = -1
 
         val FRAME_POSITION_DATA = floatArrayOf(-1f, -1f, 1f, -1f, -1f, 1f, 1f, 1f)
         val TEX_COORD_DATA = floatArrayOf(0f, 0f, 1f, 0f, 0f, 1f, 1f, 1f)

@@ -16,6 +16,9 @@ class DitherShaderProgram(
     private var program: GlProgram? = null
     private var passThroughProgram: GlProgram? = null
     private var shaderInitFailed = false
+    private val framebufferBinding = IntArray(1)
+    private val viewport = IntArray(4)
+    private val resolution = FloatArray(2)
 
     private val ditherStrength = 1.0f / ((1 shl ditherBitDepth) - 1).toFloat()
 
@@ -58,7 +61,9 @@ class DitherShaderProgram(
             program!!.use()
             program!!.setSamplerTexIdUniform("uTexSampler", inputTexId, 0)
             program!!.setFloatUniform("uDitherStrength", ditherStrength)
-            program!!.setFloatsUniform("uResolution", floatArrayOf(width.toFloat(), height.toFloat()))
+            resolution[0] = width.toFloat()
+            resolution[1] = height.toFloat()
+            program!!.setFloatsUniform("uResolution", resolution)
             program!!.bindAttributesAndUniforms()
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             checkGlError("Dither")
@@ -93,12 +98,14 @@ class DitherShaderProgram(
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
     }
 
-    private fun currentFramebuffer(): Int = IntArray(1).also {
-        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, it, 0)
-    }[0]
+    private fun currentFramebuffer(): Int {
+        GLES30.glGetIntegerv(GLES30.GL_FRAMEBUFFER_BINDING, framebufferBinding, 0)
+        return framebufferBinding[0]
+    }
 
-    private fun currentViewport(): IntArray = IntArray(4).also {
-        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, it, 0)
+    private fun currentViewport(): IntArray {
+        GLES30.glGetIntegerv(GLES30.GL_VIEWPORT, viewport, 0)
+        return viewport
     }
 
     private fun checkGlError(tag: String) {
