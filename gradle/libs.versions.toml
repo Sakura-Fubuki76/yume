@@ -38,7 +38,7 @@ sardine = "0.9"
 securityCrypto = "1.1.0"
 disklrucache = "2.0.2"
 documentfile = "1.1.0"
-yume-lib = "1.0.2"
+yume-lib = "1.0.3"
 
 
 [libraries]
