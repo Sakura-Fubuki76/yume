@@ -7,7 +7,7 @@ import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.AudioProcessorChain
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
-import com.tianscar.soundtouch.SoundTouch
+import io.github.sakurafubuki.yume.nativelib.soundtouch.SoundTouch
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs

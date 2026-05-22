@@ -71,7 +71,6 @@ dependencies {
     implementation(libs.androidx.media3.effect)
     implementation(libs.yume.lib)
 
-    implementation(libs.soundtouch.jni.core)
     implementation(libs.jakewharton.disklrucache)
     implementation(libs.androidx.documentfile)
     implementation(libs.kotlinx.coroutines.android)
