@@ -38,8 +38,7 @@ sardine = "0.9"
 securityCrypto = "1.1.0"
 disklrucache = "2.0.2"
 documentfile = "1.1.0"
-soundtouch = "1.1.1"
-yume-lib = "1.0.1"
+yume-lib = "1.0.2"
 
 
 [libraries]
@@ -99,7 +98,6 @@ sardine-android = { group = "com.github.thegrizzlylabs", name = "sardine-android
 androidx-security-crypto = { group = "androidx.security", name = "security-crypto", version.ref = "securityCrypto" }
 jakewharton-disklrucache = { group = "com.jakewharton", name = "disklrucache", version.ref = "disklrucache" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
-soundtouch-jni-core = { group = "com.tianscar.soundtouch", name = "soundtouch-jni-core", version.ref = "soundtouch" }
 yume-lib = { group = "io.github.sakurafubuki.yume", name = "yume-lib", version.ref = "yume-lib" }
 
 
