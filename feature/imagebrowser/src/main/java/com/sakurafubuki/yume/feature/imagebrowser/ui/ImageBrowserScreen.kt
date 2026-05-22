@@ -877,9 +877,7 @@ private fun ImageMediaView(
             val mediaIndex = mediaIndexByUri[uri]
             val lastKnownBounds = sharedElementRegistry.getLastKnownBounds(uri)
 
-            val coordDirect = cellCoordinatesMap[uri]?.let { coords ->
-                runCatching { coords.boundsInWindow() }.getOrNull()
-            }
+            val coordDirect = cellCoordinatesMap[uri]?.let(::sharedElementBoundsInWindow)
             if (coordDirect != null) {
                 return@boundsResolver coordDirect
             }
@@ -906,9 +904,7 @@ private fun ImageMediaView(
 
             withFrameNanos { }
             withFrameNanos { }
-            val freshCoord = cellCoordinatesMap[uri]?.let { coords ->
-                runCatching { coords.boundsInWindow() }.getOrNull()
-            }
+            val freshCoord = cellCoordinatesMap[uri]?.let(::sharedElementBoundsInWindow)
             if (freshCoord != null) {
                 return@boundsResolver freshCoord
             }
@@ -1285,9 +1281,10 @@ private fun ImageGridCell(
                 onCoordinatesChanged?.invoke(coordinates)
                 val now = SystemClock.elapsedRealtime()
                 if (now - lastBoundsUpdateMs[0] >= 32L) {
-                    val bounds = coordinates.boundsInWindow()
-                    sharedElementRegistry.updateBounds(image.uriString, bounds)
-                    lastBoundsUpdateMs[0] = now
+                    sharedElementBoundsInWindow(coordinates)?.let { bounds ->
+                        sharedElementRegistry.updateBounds(image.uriString, bounds)
+                        lastBoundsUpdateMs[0] = now
+                    }
                 }
             }
             .clickable {
@@ -1341,6 +1338,9 @@ private fun fallbackAspectRatioFor(seed: String): Float {
     val normalized = hash.toFloat() / 0xFFFFFFFFL.toFloat()
     return 0.6f + normalized * 0.9f
 }
+
+private fun sharedElementBoundsInWindow(coordinates: LayoutCoordinates): Rect? =
+    runCatching { coordinates.boundsInWindow(clipBounds = false) }.getOrNull()
 
 @Composable
 private fun ImageThumbnailSkeleton(isError: Boolean = false) {
@@ -1646,24 +1646,13 @@ fun ImageViewerRoute(
         )
     }
 
-    fun clampToViewport(bounds: Rect): Rect {
-        val clamped = Rect(
-            left = bounds.left.coerceAtLeast(0f),
-            top = bounds.top.coerceAtLeast(0f),
-            right = bounds.right.coerceAtMost(overlayViewportRect.width),
-            bottom = bounds.bottom.coerceAtMost(overlayViewportRect.height),
-        )
-        val valid = (clamped.right - clamped.left) > 16f && (clamped.bottom - clamped.top) > 16f
-        return if (valid) clamped else bounds
-    }
-
     suspend fun resolveDestinationBounds(uri: String): Rect? {
         val direct = sharedElementRegistry.getBounds(uri)
-        if (direct != null) return clampToViewport(direct)
+        if (direct != null) return direct
         val ensured = ImageViewerStore.ensureTargetBounds?.invoke(uri)
-        if (ensured != null) return clampToViewport(ensured)
+        if (ensured != null) return ensured
         val lastKnown = sharedElementRegistry.getLastKnownBounds(uri)
-        return if (lastKnown != null) clampToViewport(lastKnown) else null
+        return lastKnown
     }
 
     fun resetTransition() {
@@ -1773,19 +1762,11 @@ fun ImageViewerRoute(
             ?: sharedElementRegistry.getBounds(launchUri.orEmpty())
             ?: return@LaunchedEffect
 
-        val clampedStart = Rect(
-            left = startBounds.left.coerceAtLeast(0f),
-            top = startBounds.top.coerceAtLeast(0f),
-            right = startBounds.right.coerceAtMost(overlayViewportRect.width),
-            bottom = startBounds.bottom.coerceAtMost(overlayViewportRect.height),
-        )
-        val clampedValid = (clampedStart.right - clampedStart.left) > 16f &&
-            (clampedStart.bottom - clampedStart.top) > 16f
         val launchImageUri = launchUri
             ?.takeIf { images.any { img -> img.uriString == it } }
             ?: images[launchIndex].uriString
         hasPlayedLaunchTransition = true
-        transitionStartBounds = if (clampedValid) clampedStart else startBounds
+        transitionStartBounds = startBounds
         transitionEndBounds = imageDisplayBounds(launchImageUri)
         transitionStartCorner = 18.dp
         transitionEndCorner = 0.dp
