@@ -1697,6 +1697,32 @@ fun ImageViewerRoute(
         isAwaitingRoutePop = true
     }
 
+    fun completeCloseTransition() {
+        ImageViewerStore.heroTransitionImageUri = null
+        awaitRoutePop()
+        requestNavigateBackOnce()
+    }
+
+    fun startSharedElementCloseAnimation(initialProgress: Float, isGestureDriven: Boolean = false) {
+        transitionEngine.start(
+            type = TransitionType.SharedElement,
+            direction = Direction.Backward,
+            initialProgress = initialProgress.coerceIn(0f, 1f),
+            isGestureDriven = isGestureDriven,
+        )
+    }
+
+    suspend fun animateCloseToEnd(initialProgress: Float) {
+        animate(
+            initialValue = initialProgress.coerceIn(0f, 1f),
+            targetValue = 1f,
+            animationSpec = IMAGE_VIEWER_CLOSE_ANIMATION,
+        ) { value, _ ->
+            transitionEngine.updateProgress(value)
+        }
+        completeCloseTransition()
+    }
+
     suspend fun startCloseTransition(
         trigger: CloseTrigger,
         initialProgress: Float,
@@ -1725,16 +1751,7 @@ fun ImageViewerRoute(
             startRectOverride = startRectOverride,
         )
         if (!started) return
-        animate(
-            initialValue = initialProgress.coerceIn(0f, 1f),
-            targetValue = 1f,
-            animationSpec = IMAGE_VIEWER_CLOSE_ANIMATION,
-        ) { value, _ ->
-            transitionEngine.updateProgress(value)
-        }
-        ImageViewerStore.heroTransitionImageUri = null
-        awaitRoutePop()
-        requestNavigateBackOnce()
+        animateCloseToEnd(initialProgress)
     }
 
     DisposableEffect(Unit) {
@@ -1889,12 +1906,7 @@ fun ImageViewerRoute(
                     startRectOverride = currentRectOverride,
                 )
                 showHeroOverlay = true
-                transitionEngine.start(
-                    type = TransitionType.SharedElement,
-                    direction = Direction.Backward,
-                    initialProgress = releaseProgress,
-                    isGestureDriven = false,
-                )
+                startSharedElementCloseAnimation(releaseProgress)
 
                 if (syncBounds == null) {
                     scope.launch {
@@ -1906,17 +1918,7 @@ fun ImageViewerRoute(
                     }
                 }
 
-                animate(
-                    initialValue = releaseProgress,
-                    targetValue = 1f,
-                    animationSpec = IMAGE_VIEWER_CLOSE_ANIMATION,
-                ) { value, _ ->
-                    transitionEngine.updateProgress(value)
-                }
-
-                ImageViewerStore.heroTransitionImageUri = null
-                awaitRoutePop()
-                requestNavigateBackOnce()
+                animateCloseToEnd(releaseProgress)
             } catch (_: CancellationException) {
                 animate(
                     initialValue = transitionEngine.progress.coerceIn(0f, 1f),
@@ -2035,34 +2037,15 @@ fun ImageViewerRoute(
 
                             scope.launch {
                                 val resolvedBounds = immediateBounds ?: resolveDestinationBounds(currentUri)
-                                transitionEndBounds = resolvedBounds
-                                useFallbackCloseAnimation = resolvedBounds == null
-
-                                transitionEngine.start(
-                                    type = TransitionType.SharedElement,
-                                    direction = Direction.Backward,
-                                    initialProgress = capturedProgress,
-                                    isGestureDriven = false,
+                                beginCloseTransition(
+                                    currentUri = currentUri,
+                                    destinationBounds = resolvedBounds,
+                                    startRectOverride = currentRect,
                                 )
-                                isCloseOverlay = true
                                 showHeroOverlay = true
-                                animationReady = true
-                                isTransitionRunning = true
-                                transitionStartBounds = currentRect
-                                transitionImageUri = currentUri
-                                transitionStartCorner = 0.dp
-                                transitionEndCorner = 18.dp
+                                startSharedElementCloseAnimation(capturedProgress)
 
-                                animate(
-                                    initialValue = capturedProgress,
-                                    targetValue = 1f,
-                                    animationSpec = IMAGE_VIEWER_CLOSE_ANIMATION,
-                                ) { value, _ ->
-                                    transitionEngine.updateProgress(value)
-                                }
-                                ImageViewerStore.heroTransitionImageUri = null
-                                awaitRoutePop()
-                                requestNavigateBackOnce()
+                                animateCloseToEnd(capturedProgress)
                             }
                         } else {
                             swipeDismissProgress = 0f
