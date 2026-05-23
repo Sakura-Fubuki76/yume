@@ -47,6 +47,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
@@ -1583,13 +1584,46 @@ class MediaPickerViewModel @Inject constructor(
         items: List<com.sakurafubuki.yume.core.model.WebDavMediaItem>,
     ) {
         viewModelScope.launch(cloudAuxParent + Dispatchers.IO) {
+            val normalizedPath = normalizePath(path)
+            val recurse = preferences.mediaViewMode == MediaViewMode.FOLDER_TREE
+            val metadataHrefs = buildSet {
+                if (recurse) {
+                    collectVideoHrefsFromCachedTree(
+                        server = server,
+                        parentPath = normalizedPath,
+                        items = items,
+                        visitedPaths = mutableSetOf(),
+                        collector = this,
+                    )
+                } else {
+                    items.cloudDisplayVideoFiles().forEach { item -> add(item.href) }
+                }
+            }.toList()
+            val folderPaths = buildSet {
+                add(normalizedPath)
+                if (recurse) {
+                    collectFolderPathsFromCachedTree(
+                        server = server,
+                        parentPath = normalizedPath,
+                        items = items,
+                        visitedPaths = mutableSetOf(),
+                        collector = this,
+                    )
+                } else {
+                    items.asSequence()
+                        .cloudDirectoryItems()
+                        .map { item -> normalizePath(resolveRelativePath(server, item.href)) }
+                        .forEach(::add)
+                }
+            }.toList()
+
             combine(
-                cloudVideoMetadataRepository.observeMetadata(server.id),
-                cloudVideoMetadataRepository.observeFolderMetadata(server.id),
+                cloudVideoMetadataRepository.observeMetadata(server.id, metadataHrefs),
+                cloudVideoMetadataRepository.observeFolderMetadata(server.id, folderPaths),
             ) { metadataMap, folderMetadataMap ->
                 metadataMap to folderMetadataMap
-            }.collect { (metadataMap, folderMetadataMap) ->
-                if (requestToken != cloudLoadRequestToken) return@collect
+            }.collectLatest { (metadataMap, folderMetadataMap) ->
+                if (requestToken != cloudLoadRequestToken) return@collectLatest
 
                 val refreshedFolder = withContext(Dispatchers.Default) {
                     mapCloudFolder(
@@ -1599,7 +1633,7 @@ class MediaPickerViewModel @Inject constructor(
                         items = items,
                         metadataByHref = metadataMap,
                         folderMetadataMap = folderMetadataMap,
-                        rootCachedMetadata = folderMetadataMap[normalizePath(path)],
+                        rootCachedMetadata = folderMetadataMap[normalizedPath],
                         hideUnknownFolders = preferences.mediaViewMode == MediaViewMode.FOLDER_TREE,
                     )
                 }
@@ -1608,10 +1642,10 @@ class MediaPickerViewModel @Inject constructor(
                     preferences = preferences,
                 )
 
-                if (requestToken != cloudLoadRequestToken) return@collect
-                if (!shouldApplyCloudDisplayFolder(preferences, refreshedFolder, displayFolder)) return@collect
+                if (requestToken != cloudLoadRequestToken) return@collectLatest
+                if (!shouldApplyCloudDisplayFolder(preferences, refreshedFolder, displayFolder)) return@collectLatest
 
-                val currentFolderMetadata = folderMetadataMap[normalizePath(path)]
+                val currentFolderMetadata = folderMetadataMap[normalizedPath]
                 if (currentFolderMetadata == null ||
                     currentFolderMetadata.totalDurationMs != displayFolder.mediaDuration ||
                     currentFolderMetadata.totalSize != displayFolder.mediaSize ||
@@ -1621,7 +1655,7 @@ class MediaPickerViewModel @Inject constructor(
                     val directVideoCount = items.cloudDisplayVideoFiles().size
                     saveFolderMetadataPreserving(
                         serverId = server.id,
-                        folderPath = normalizePath(path),
+                        folderPath = normalizedPath,
                         totalDurationMs = displayFolder.mediaDuration,
                         totalSize = displayFolder.mediaSize,
                         mediaCount = displayFolder.mediaCount,

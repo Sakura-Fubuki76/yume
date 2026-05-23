@@ -110,6 +110,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import okhttp3.HttpUrl
@@ -119,6 +121,7 @@ import okhttp3.Request
 import okhttp3.ResponseBody.Companion.toResponseBody
 
 private const val TAG = "PlayerService"
+private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
 
 @OptIn(UnstableApi::class)
 @AndroidEntryPoint
@@ -519,7 +522,11 @@ class PlayerService : MediaSessionService() {
             startIndex: Int,
             startPositionMs: Long,
         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = serviceScope.future(Dispatchers.Default) {
-            val updatedMediaItems = updatedMediaItemsWithMetadata(mediaItems)
+            val subtitleDiscoveryIndex = startIndex.takeIf { it in mediaItems.indices }
+            val updatedMediaItems = updatedMediaItemsWithMetadata(
+                mediaItems = mediaItems,
+                subtitleDiscoveryIndex = subtitleDiscoveryIndex,
+            )
             return@future MediaSession.MediaItemsWithStartPosition(updatedMediaItems, startIndex, startPositionMs)
         }
 
@@ -890,147 +897,176 @@ class PlayerService : MediaSessionService() {
     @SuppressLint("UseKtx")
     private suspend fun updatedMediaItemsWithMetadata(
         mediaItems: List<MediaItem>,
+        subtitleDiscoveryIndex: Int? = null,
     ): List<MediaItem> = supervisorScope {
-        mediaItems.map { mediaItem ->
+        val metadataSemaphore = Semaphore(PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY)
+        mediaItems.mapIndexed { index, mediaItem ->
             async {
-                val uri = mediaItem.mediaId.toUri()
-                val video = mediaRepository.getVideoByUri(uri = mediaItem.mediaId)
-                val videoState = mediaRepository.getVideoState(uri = mediaItem.mediaId)
-
-                val externalSubs = videoState?.externalSubs?.filter { subUri ->
-                    when {
-                        subUri.scheme.equals("http", ignoreCase = true) ||
-                            subUri.scheme.equals("https", ignoreCase = true) -> true
-                        else -> try {
-                            contentResolver.openInputStream(subUri)?.use { true } ?: false
-                        } catch (_: Exception) {
-                            false
-                        }
-                    }
-                } ?: emptyList()
-
-                val resolvedPath = getPath(uri) ?: videoState?.path
-                Logger.d(
-                    "PlayerService",
-                    "subtitleDiscovery: uri=$uri, resolvedPath=$resolvedPath, " +
-                        "getPath=${getPath(uri)}, videoStatePath=${videoState?.path}",
-                )
-                val localSubs = when {
-                    uri.scheme.equals("http", ignoreCase = true) ||
-                        uri.scheme.equals("https", ignoreCase = true) -> {
-                        probeRemoteSubtitles(uri.toString(), externalSubs)
-                    }
-                    else -> {
-                        resolvedPath?.let {
-                            File(it).getLocalSubtitles(
-                                context = this@PlayerService,
-                                excludeSubsList = externalSubs,
-                            )
-                        } ?: emptyList()
-                    }
-                }
-                Logger.d("PlayerService", "subtitleDiscovery: localSubs=$localSubs, externalSubs=$externalSubs")
-
-                val existingSubConfigurations = mediaItem.localConfiguration?.subtitleConfigurations?.filter { config ->
-                    val subUri = config.uri.toString()
-                    when {
-                        subUri.startsWith("http://") || subUri.startsWith("https://") -> true
-                        else -> try {
-                            val u = subUri.toUri()
-                            contentResolver.openInputStream(u)?.use { true } ?: false
-                        } catch (_: Exception) {
-                            false
-                        }
-                    }
-                } ?: emptyList()
-
-                val hasPriorTrackSelection = mediaItem.mediaMetadata.subtitleTrackIndex != null ||
-                    videoState?.subtitleTrackIndex != null
-                val hasPriorSubConfigSelection = existingSubConfigurations.any {
-                    it.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0
-                }
-                val shouldAutoSelect = !hasPriorTrackSelection &&
-                    !hasPriorSubConfigSelection &&
-                    playerPreferences.rememberSelections
-
-                val allSubUris = localSubs + externalSubs
-                val bestCandidateUri: Uri? = if (shouldAutoSelect) {
-                    findBestSubtitleCandidate(allSubUris)
-                } else {
-                    null
-                }
-                Logger.d(
-                    "PlayerService",
-                    "subtitleAutoSelect: shouldAutoSelect=$shouldAutoSelect, " +
-                        "bestCandidate=$bestCandidateUri, allSubs=$allSubUris",
-                )
-
-                val (assUris, nonAssUris) = allSubUris.partition { uri ->
-                    val path = uri.lastPathSegment ?: uri.path ?: ""
-                    path.endsWith(".ass", ignoreCase = true) || path.endsWith(".ssa", ignoreCase = true)
-                }
-                AssSubtitleState.availableAssFilesByMediaId[mediaItem.mediaId] = assUris
-                val bestAssUri = if (bestCandidateUri != null && bestCandidateUri in assUris) {
-                    bestCandidateUri
-                } else {
-                    assUris.firstOrNull()
-                }
-                if (bestAssUri != null && shouldAutoSelect) {
-                    AssSubtitleState.autoSelectAssByMediaId[mediaItem.mediaId] = bestAssUri
-                }
-                val subConfigurations = nonAssUris.map { subtitleUri ->
-                    uriToSubtitleConfiguration(
-                        uri = subtitleUri,
-                        subtitleEncoding = playerPreferences.subtitleTextEncoding,
-                        isSelected = subtitleUri == bestCandidateUri,
+                metadataSemaphore.withPermit {
+                    updatedMediaItemWithMetadata(
+                        mediaItem = mediaItem,
+                        shouldDiscoverSubtitles = subtitleDiscoveryIndex == null || index == subtitleDiscoveryIndex,
                     )
                 }
-
-                val existingArtworkUri = mediaItem.mediaMetadata.artworkUri
-                val isDefaultArtwork = existingArtworkUri != null && existingArtworkUri.scheme == ContentResolver.SCHEME_ANDROID_RESOURCE
-                val artworkUri = when {
-                    existingArtworkUri != null && !isDefaultArtwork -> existingArtworkUri
-                    else -> {
-                        val cloudThumbnail = resolveCloudVideoThumbnail(mediaItem.mediaId)
-                        cloudThumbnail ?: getDefaultArtworkUri()
-                    }
-                }
-
-                var resolvedDurationMs = video?.duration?.takeIf { it > 0L }
-                if (resolvedDurationMs == null || resolvedDurationMs <= 0L) {
-                    resolvedDurationMs = resolveCloudVideoDuration(mediaItem.mediaId)
-                }
-
-                val title = mediaItem.mediaMetadata.title ?: video?.nameWithExtension ?: getFilenameFromUri(uri)
-                val positionMs = mediaItem.mediaMetadata.positionMs ?: videoState?.position
-                val videoScale = mediaItem.mediaMetadata.videoZoom ?: videoState?.videoScale
-                val playbackSpeed = mediaItem.mediaMetadata.playbackSpeed ?: videoState?.playbackSpeed
-                val audioTrackIndex = mediaItem.mediaMetadata.audioTrackIndex ?: videoState?.audioTrackIndex
-                val subtitleTrackIndex = mediaItem.mediaMetadata.subtitleTrackIndex ?: videoState?.subtitleTrackIndex
-                val subtitleDelay = mediaItem.mediaMetadata.subtitleDelayMilliseconds ?: videoState?.subtitleDelayMilliseconds
-                val subtitleSpeed = mediaItem.mediaMetadata.subtitleSpeed ?: videoState?.subtitleSpeed
-
-                mediaItem.buildUpon().apply {
-                    setSubtitleConfigurations(existingSubConfigurations + subConfigurations)
-                    setMediaMetadata(
-                        MediaMetadata.Builder().apply {
-                            setTitle(title)
-                            setArtworkUri(artworkUri)
-                            resolvedDurationMs?.let { setDurationMs(it) }
-                            setExtras(
-                                positionMs = positionMs,
-                                videoScale = videoScale,
-                                playbackSpeed = playbackSpeed,
-                                audioTrackIndex = audioTrackIndex,
-                                subtitleTrackIndex = subtitleTrackIndex,
-                                subtitleDelayMilliseconds = subtitleDelay,
-                                subtitleSpeed = subtitleSpeed,
-                            )
-                        }.build(),
-                    )
-                }.build()
             }
         }.awaitAll()
+    }
+
+    private suspend fun updatedMediaItemWithMetadata(
+        mediaItem: MediaItem,
+        shouldDiscoverSubtitles: Boolean,
+    ): MediaItem {
+        val uri = mediaItem.mediaId.toUri()
+        val video = mediaRepository.getVideoByUri(uri = mediaItem.mediaId)
+        val videoState = mediaRepository.getVideoState(uri = mediaItem.mediaId)
+
+        val externalSubs = if (shouldDiscoverSubtitles) {
+            videoState?.externalSubs?.filter { subUri ->
+                when {
+                    subUri.scheme.equals("http", ignoreCase = true) ||
+                        subUri.scheme.equals("https", ignoreCase = true) -> true
+                    else -> try {
+                        contentResolver.openInputStream(subUri)?.use { true } ?: false
+                    } catch (_: Exception) {
+                        false
+                    }
+                }
+            } ?: emptyList()
+        } else {
+            emptyList()
+        }
+
+        val resolvedPath = if (shouldDiscoverSubtitles) getPath(uri) ?: videoState?.path else videoState?.path
+        if (shouldDiscoverSubtitles) {
+            Logger.d(
+                "PlayerService",
+                "subtitleDiscovery: uri=$uri, resolvedPath=$resolvedPath, videoStatePath=${videoState?.path}",
+            )
+        }
+        val localSubs = if (shouldDiscoverSubtitles) {
+            when {
+                uri.scheme.equals("http", ignoreCase = true) ||
+                    uri.scheme.equals("https", ignoreCase = true) -> {
+                    probeRemoteSubtitles(uri.toString(), externalSubs)
+                }
+                else -> {
+                    resolvedPath?.let {
+                        File(it).getLocalSubtitles(
+                            context = this@PlayerService,
+                            excludeSubsList = externalSubs,
+                        )
+                    } ?: emptyList()
+                }
+            }
+        } else {
+            emptyList()
+        }
+        if (shouldDiscoverSubtitles) {
+            Logger.d("PlayerService", "subtitleDiscovery: localSubs=$localSubs, externalSubs=$externalSubs")
+        }
+
+        val existingSubConfigurations = mediaItem.localConfiguration?.subtitleConfigurations?.filter { config ->
+            val subUri = config.uri.toString()
+            when {
+                subUri.startsWith("http://") || subUri.startsWith("https://") -> true
+                else -> try {
+                    val u = subUri.toUri()
+                    contentResolver.openInputStream(u)?.use { true } ?: false
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        } ?: emptyList()
+
+        val hasPriorTrackSelection = mediaItem.mediaMetadata.subtitleTrackIndex != null ||
+            videoState?.subtitleTrackIndex != null
+        val hasPriorSubConfigSelection = existingSubConfigurations.any {
+            it.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0
+        }
+        val shouldAutoSelect = !hasPriorTrackSelection &&
+            !hasPriorSubConfigSelection &&
+            playerPreferences.rememberSelections
+
+        val allSubUris = localSubs + externalSubs
+        val bestCandidateUri: Uri? = if (shouldAutoSelect) {
+            findBestSubtitleCandidate(allSubUris)
+        } else {
+            null
+        }
+        if (shouldDiscoverSubtitles) {
+            Logger.d(
+                "PlayerService",
+                "subtitleAutoSelect: shouldAutoSelect=$shouldAutoSelect, " +
+                    "bestCandidate=$bestCandidateUri, allSubs=$allSubUris",
+            )
+        }
+
+        val (assUris, nonAssUris) = allSubUris.partition { uri ->
+            val path = uri.lastPathSegment ?: uri.path ?: ""
+            path.endsWith(".ass", ignoreCase = true) || path.endsWith(".ssa", ignoreCase = true)
+        }
+        if (shouldDiscoverSubtitles) {
+            AssSubtitleState.availableAssFilesByMediaId[mediaItem.mediaId] = assUris
+        }
+        val bestAssUri = if (bestCandidateUri != null && bestCandidateUri in assUris) {
+            bestCandidateUri
+        } else {
+            assUris.firstOrNull()
+        }
+        if (bestAssUri != null && shouldAutoSelect) {
+            AssSubtitleState.autoSelectAssByMediaId[mediaItem.mediaId] = bestAssUri
+        }
+        val subConfigurations = nonAssUris.map { subtitleUri ->
+            uriToSubtitleConfiguration(
+                uri = subtitleUri,
+                subtitleEncoding = playerPreferences.subtitleTextEncoding,
+                isSelected = subtitleUri == bestCandidateUri,
+            )
+        }
+
+        val existingArtworkUri = mediaItem.mediaMetadata.artworkUri
+        val isDefaultArtwork = existingArtworkUri != null && existingArtworkUri.scheme == ContentResolver.SCHEME_ANDROID_RESOURCE
+        val artworkUri = when {
+            existingArtworkUri != null && !isDefaultArtwork -> existingArtworkUri
+            else -> {
+                val cloudThumbnail = resolveCloudVideoThumbnail(mediaItem.mediaId)
+                cloudThumbnail ?: getDefaultArtworkUri()
+            }
+        }
+
+        var resolvedDurationMs = video?.duration?.takeIf { it > 0L }
+        if (resolvedDurationMs == null || resolvedDurationMs <= 0L) {
+            resolvedDurationMs = resolveCloudVideoDuration(mediaItem.mediaId)
+        }
+
+        val title = mediaItem.mediaMetadata.title ?: video?.nameWithExtension ?: getFilenameFromUri(uri)
+        val positionMs = mediaItem.mediaMetadata.positionMs ?: videoState?.position
+        val videoScale = mediaItem.mediaMetadata.videoZoom ?: videoState?.videoScale
+        val playbackSpeed = mediaItem.mediaMetadata.playbackSpeed ?: videoState?.playbackSpeed
+        val audioTrackIndex = mediaItem.mediaMetadata.audioTrackIndex ?: videoState?.audioTrackIndex
+        val subtitleTrackIndex = mediaItem.mediaMetadata.subtitleTrackIndex ?: videoState?.subtitleTrackIndex
+        val subtitleDelay = mediaItem.mediaMetadata.subtitleDelayMilliseconds ?: videoState?.subtitleDelayMilliseconds
+        val subtitleSpeed = mediaItem.mediaMetadata.subtitleSpeed ?: videoState?.subtitleSpeed
+
+        return mediaItem.buildUpon().apply {
+            setSubtitleConfigurations(existingSubConfigurations + subConfigurations)
+            setMediaMetadata(
+                MediaMetadata.Builder().apply {
+                    setTitle(title)
+                    setArtworkUri(artworkUri)
+                    resolvedDurationMs?.let { setDurationMs(it) }
+                    setExtras(
+                        positionMs = positionMs,
+                        videoScale = videoScale,
+                        playbackSpeed = playbackSpeed,
+                        audioTrackIndex = audioTrackIndex,
+                        subtitleTrackIndex = subtitleTrackIndex,
+                        subtitleDelayMilliseconds = subtitleDelay,
+                        subtitleSpeed = subtitleSpeed,
+                    )
+                }.build(),
+            )
+        }.build()
     }
 
     private fun findBestSubtitleCandidate(subtitleUris: List<Uri>): Uri? {
