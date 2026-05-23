@@ -51,6 +51,7 @@ import java.time.Instant
 import java.time.format.DateTimeParseException
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -669,6 +670,7 @@ class ImageBrowserViewModel @Inject constructor(
                     val newItems = data.content.orEmpty().map { it.toWebDavMediaItem(server, apiPath) }
 
                     val newFolder = mapCloudFolder(server = server, path = apiPath, preferences = preferences, items = newItems)
+                    preloadCloudPageAssets(newFolder, preferences)
                     val currentContent = uiStateInternal.value.cloudGalleryState as? ImageGalleryUiState.Content
                     val folder = currentContent?.folder?.copy(
                         mediaList = currentContent.folder.mediaList + newFolder.mediaList,
@@ -793,10 +795,14 @@ class ImageBrowserViewModel @Inject constructor(
                 val total = maxOf(data.total, sortedImages.size)
                 val pageLimit = (page * perPage).coerceAtLeast(perPage)
                 val folderImages = sortedImages.take(pageLimit)
-                warmCloudThumbnailCache(
-                    sortedImages.drop(((page - 1).coerceAtLeast(0) * perPage)).take(perPage),
-                    preferences,
+                val pageImages = sortedImages.drop(((page - 1).coerceAtLeast(0) * perPage)).take(perPage)
+                Logger.d(
+                    TAG,
+                    "imageHostingPage loaded page=$page append=$append pageImages=${pageImages.size} visible=${folderImages.size} total=$total",
                 )
+                if (append) {
+                    warmCloudThumbnailCache(pageImages, preferences)
+                }
                 val folder = Folder(
                     name = cloudFolderDisplayName(server, path),
                     path = normalizePath(path),
@@ -876,6 +882,10 @@ class ImageBrowserViewModel @Inject constructor(
         )
         if (pagesToPreload <= 0 || currentPage * perPage >= totalItems) return
 
+        Logger.d(
+            TAG,
+            "imageHostingPreload start currentPage=$currentPage pages=$pagesToPreload perPage=$perPage total=$totalItems",
+        )
         viewModelScope.launch(Dispatchers.IO) {
             var page = currentPage
             repeat(pagesToPreload) {
@@ -1014,6 +1024,10 @@ class ImageBrowserViewModel @Inject constructor(
         )
         if (pagesToPreload <= 0 || currentPage * perPage >= totalItems) return
 
+        Logger.d(
+            TAG,
+            "cloudPreload start currentPage=$currentPage pages=$pagesToPreload perPage=$perPage total=$totalItems media=${currentFolder.mediaList.size}",
+        )
         viewModelScope.launch(Dispatchers.IO) {
             var page = currentPage
             var folder = currentFolder
@@ -1028,6 +1042,8 @@ class ImageBrowserViewModel @Inject constructor(
 
                 val newItems = data.content.orEmpty().map { it.toWebDavMediaItem(server, apiPath) }
                 val newFolder = mapCloudFolder(server = server, path = apiPath, preferences = preferences, items = newItems)
+                Logger.d(TAG, "cloudPreload pageFetched page=$nextPage media=${newFolder.mediaList.size} folders=${newFolder.folderList.size}")
+                preloadCloudPageAssets(newFolder, preferences)
                 folder = appendCloudPageFolder(server.id, folder, newFolder)
                 page = nextPage
 
@@ -1055,6 +1071,27 @@ class ImageBrowserViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private suspend fun preloadCloudPageAssets(
+        folder: Folder,
+        preferences: ApplicationPreferences,
+    ) = coroutineScope {
+        Logger.d(TAG, "cloudPreload assets start media=${folder.mediaList.size} folders=${folder.folderList.size}")
+        val thumbnailWarmJob = async {
+            warmCloudThumbnailCache(folder.mediaList, preferences)
+        }
+        val dimensionTargets = collectMissingDimensionTargets(folder)
+        val dimensionProbeJob = if (dimensionTargets.isNotEmpty()) {
+            async {
+                probeMissingCloudDimensions(dimensionTargets)
+            }
+        } else {
+            null
+        }
+        thumbnailWarmJob.await()
+        dimensionProbeJob?.await()
+        Logger.d(TAG, "cloudPreload assets done media=${folder.mediaList.size} dimensions=${dimensionTargets.size}")
     }
 
     private suspend fun appendCloudPageFolder(serverId: Int, current: Folder, next: Folder): Folder {
@@ -2777,7 +2814,7 @@ class ImageBrowserViewModel @Inject constructor(
         }.awaitAll()
     }
 
-    private fun warmCloudThumbnailCache(
+    private suspend fun warmCloudThumbnailCache(
         images: List<Video>,
         preferences: ApplicationPreferences,
     ) {
@@ -2796,14 +2833,17 @@ class ImageBrowserViewModel @Inject constructor(
             .toList()
         if (targets.isEmpty()) return
 
-        viewModelScope.launch(Dispatchers.IO) {
+        Logger.d(TAG, "warmCloudThumbnailCache start images=${images.size} targets=${targets.size}")
+        withContext(Dispatchers.IO) {
             val imageLoader = SingletonImageLoader.get(context)
             val semaphore = Semaphore(CLOUD_THUMBNAIL_WARM_CONCURRENCY)
+            val successCount = AtomicInteger(0)
+            val failureCount = AtomicInteger(0)
             targets.map { uri ->
                 async {
                     semaphore.withPermit {
                         runCatching {
-                            imageLoader.execute(
+                            val result = imageLoader.execute(
                                 buildImageRequest(
                                     context = context,
                                     data = uri,
@@ -2812,10 +2852,19 @@ class ImageBrowserViewModel @Inject constructor(
                                     thumbnailMaxEdgePx = preferences.imageBrowserThumbnailSizePx,
                                 ),
                             )
+                            if (result is SuccessResult) {
+                                GridImageLoadMemory.add(uri)
+                                successCount.incrementAndGet()
+                            } else {
+                                failureCount.incrementAndGet()
+                            }
+                        }.onFailure {
+                            failureCount.incrementAndGet()
                         }
                     }
                 }
             }.awaitAll()
+            Logger.d(TAG, "warmCloudThumbnailCache done targets=${targets.size} success=${successCount.get()} failure=${failureCount.get()}")
         }
     }
 

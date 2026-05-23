@@ -55,7 +55,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -102,6 +101,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
+import coil3.request.SuccessResult
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -132,15 +132,18 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private val LocalGridLockState = compositionLocalOf { mutableStateOf(false) }
@@ -190,6 +193,8 @@ private const val IMAGE_VIEWER_ARC_MAX_PX = 220f
 private const val IMAGE_VIEWER_MEMORY_PRELOAD_RADIUS = 1
 private const val IMAGE_VIEWER_DISK_PRELOAD_RADIUS_MAX = 2
 private const val IMAGE_VIEWER_PRELOAD_CONCURRENCY = 2
+private const val IMAGE_GRID_SCREEN_PRELOAD_CONCURRENCY = 4
+private const val IMAGE_GRID_MIN_SCREEN_PRELOAD_ITEMS = 8
 private const val CLOUD_SERVER_PATH_PREFIX = "__cloud_server__"
 private val DEFAULT_IMAGE_QUALITY = ImageQuality.HIGH
 private val VIEWER_IMAGE_QUALITY = ImageQuality.ORIGINAL
@@ -216,7 +221,7 @@ private object ImageCellLoadState {
     const val ERROR = 2
 }
 
-private object GridImageLoadMemory {
+internal object GridImageLoadMemory {
     private const val MAX_ENTRIES = 2000
     private val loadedUris = object : LinkedHashMap<String, Boolean>(MAX_ENTRIES, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean = size > MAX_ENTRIES
@@ -919,6 +924,7 @@ private fun ImageMediaView(
 ) {
     val gridState = rememberLazyStaggeredGridState()
     val sharedElementRegistry = LocalSharedElementRegistry.current
+    val context = LocalContext.current
     val density = LocalDensity.current
 
     val contentHorizontalPadding = 8.dp
@@ -958,6 +964,52 @@ private fun ImageMediaView(
         }
             .distinctUntilChanged()
             .collect(onTopBarScrollProgressChanged)
+    }
+
+    LaunchedEffect(
+        gridState,
+        rootFolder.path,
+        folderCount,
+        mediaCount,
+        isCloudMode,
+        preferences.imageBrowserPreloadPageCount,
+        preferences.imageQuality,
+        preferences.imageBrowserThumbnailSizePx,
+        localImageLoader,
+    ) {
+        val pagesToPreload = preferences.imageBrowserPreloadPageCount.coerceIn(
+            ApplicationPreferences.MIN_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
+            ApplicationPreferences.MAX_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
+        )
+        if (!isCloudMode || pagesToPreload <= 0 || mediaCount <= 0) return@LaunchedEffect
+
+        snapshotFlow {
+            val visibleMediaIndexes = gridState.layoutInfo.visibleItemsInfo
+                .asSequence()
+                .map { item -> item.index - folderCount }
+                .filter { index -> index in 0 until mediaCount }
+                .toList()
+            if (visibleMediaIndexes.isEmpty()) {
+                null
+            } else {
+                val screenItemCount = max(visibleMediaIndexes.size, IMAGE_GRID_MIN_SCREEN_PRELOAD_ITEMS)
+                val preloadStart = visibleMediaIndexes.maxOrNull()!! + 1
+                val preloadEndExclusive = (preloadStart + screenItemCount * pagesToPreload).coerceAtMost(mediaCount)
+                preloadStart to preloadEndExclusive
+            }
+        }
+            .distinctUntilChanged()
+            .collectLatest { range ->
+                val (start, endExclusive) = range ?: return@collectLatest
+                if (start >= endExclusive) return@collectLatest
+                preloadGridScreenThumbnails(
+                    context = context,
+                    localImageLoader = localImageLoader,
+                    images = rootFolder.mediaList.subList(start, endExclusive),
+                    imageQuality = preferences.imageQuality,
+                    thumbnailMaxEdgePx = preferences.imageBrowserThumbnailSizePx,
+                )
+            }
     }
 
     LaunchedEffect(gridState, totalItems, cloudHasMore, cloudLoadingMore) {
@@ -1407,9 +1459,11 @@ private fun ImageGridCell(
                     .fillMaxSize()
                     .graphicsLayer {
                         alpha = if (ImageViewerStore.heroTransitionImageUri == image.uriString) 0f else fadeInAlpha
-                    },
+                },
                 onLoading = {
-                    loadState = ImageCellLoadState.LOADING
+                    if (!GridImageLoadMemory.contains(displayUri)) {
+                        loadState = ImageCellLoadState.LOADING
+                    }
                 },
                 onError = {
                     loadState = ImageCellLoadState.ERROR
@@ -1574,6 +1628,51 @@ private fun Video.displayUriString(): String = thumbnailUriString?.takeIf { it.i
 private fun localNavigateUpTarget(path: String, imageViewMode: MediaViewMode): String = when (imageViewMode) {
     MediaViewMode.FOLDERS -> "/"
     else -> parentPath(path)
+}
+
+private suspend fun preloadGridScreenThumbnails(
+    context: Context,
+    localImageLoader: ImageLoader,
+    images: List<Video>,
+    imageQuality: ImageQuality,
+    thumbnailMaxEdgePx: Int,
+) {
+    val targets = images
+        .asSequence()
+        .map { image -> image.displayUriString() }
+        .filter { uri -> uri.isNotBlank() && !GridImageLoadMemory.contains(uri) }
+        .distinct()
+        .toList()
+    if (targets.isEmpty()) return
+
+    withContext(Dispatchers.IO) {
+        val semaphore = Semaphore(IMAGE_GRID_SCREEN_PRELOAD_CONCURRENCY)
+        val successCount = targets.map { uri ->
+            async {
+                semaphore.withPermit {
+                    val loader = resolveImageLoader(context, uri, localImageLoader)
+                    val result = runCatching {
+                        loader.execute(
+                            buildImageRequest(
+                                context = context,
+                                data = uri,
+                                quality = imageQuality,
+                                profile = ImageRequestProfile.THUMBNAIL,
+                                thumbnailMaxEdgePx = thumbnailMaxEdgePx,
+                            ),
+                        )
+                    }.getOrNull()
+                    if (result is SuccessResult) {
+                        GridImageLoadMemory.add(uri)
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+        }.awaitAll().count { it }
+        Logger.d(TAG, "gridScreenPreload done targets=${targets.size} success=$successCount")
+    }
 }
 
 private fun decodeCloudFolderPath(path: String): Pair<Int, String>? {
@@ -2303,8 +2402,7 @@ private fun projectStartRectForCurrentProgress(current: Rect, end: Rect, progres
     )
 }
 
-private fun projectStartValue(current: Float, end: Float, progress: Float, remainingProgress: Float): Float =
-    (current - end * progress) / remainingProgress
+private fun projectStartValue(current: Float, end: Float, progress: Float, remainingProgress: Float): Float = (current - end * progress) / remainingProgress
 
 private fun sharedElementArcHeight(distance: Float, sizeDelta: Float): Float = max(
     IMAGE_VIEWER_ARC_MIN_PX,
