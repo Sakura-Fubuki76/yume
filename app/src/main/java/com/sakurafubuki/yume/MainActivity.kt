@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
@@ -57,6 +58,7 @@ import com.sakurafubuki.yume.core.ui.motion.OverlayLayer
 import com.sakurafubuki.yume.core.ui.motion.SharedElementRegistry
 import com.sakurafubuki.yume.core.ui.motion.TransitionEngine
 import com.sakurafubuki.yume.core.ui.theme.YumeTheme
+import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerRoute
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerStore
 import com.sakurafubuki.yume.navigation.AppBottomNavBar
 import com.sakurafubuki.yume.navigation.AppNavHost
@@ -165,9 +167,10 @@ private fun MainScreen(
     val settingsBackStack = rememberNavBackStack(SettingsHomeKey)
 
     val selectedScreen = pageToScreen(pagerState.currentPage)
-    val bottomBarVisible = !(selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing)
+    val imageViewerShowing = selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing
+    val bottomBarVisible = !imageViewerShowing
     val tabSwipeEnabled = bottomBarVisible
-    val imageViewerImmersiveStatusBar = selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing
+    val imageViewerImmersiveStatusBar = imageViewerShowing
 
     val transitionEngine = remember { TransitionEngine() }
     val sharedElementRegistry = remember { SharedElementRegistry() }
@@ -225,8 +228,8 @@ private fun MainScreen(
                 containerColor = MaterialTheme.colorScheme.background,
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 bottomBar = {
-                    val barAlpha = if (selectedScreen == Screen.Image) ImageViewerStore.bottomBarAlpha else 1f
-                    val shouldRenderBar = bottomBarVisible || barAlpha > 0.001f
+                    val barAlpha = if (imageViewerShowing) 0f else 1f
+                    val shouldRenderBar = bottomBarVisible || selectedScreen == Screen.Image
                     if (shouldRenderBar) {
                         Box(
                             modifier = Modifier
@@ -265,6 +268,29 @@ private fun MainScreen(
                         .padding(innerPadding)
                         .fillMaxSize(),
                 )
+            }
+
+            if (imageViewerShowing) {
+                ImageViewerRoute(
+                    initialIndex = ImageViewerStore.viewerIndex,
+                    onBack = ImageViewerStore::hideViewer,
+                )
+
+                val overlayBottomBarAlpha = ImageViewerStore.bottomBarAlpha.coerceIn(0f, 1f)
+                if (overlayBottomBarAlpha > 0.001f) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .graphicsLayer {
+                                alpha = overlayBottomBarAlpha
+                            },
+                    ) {
+                        AppBottomNavBar(
+                            selectedScreen = selectedScreen,
+                            onNavigate = {},
+                        )
+                    }
+                }
             }
 
             OverlayLayer()

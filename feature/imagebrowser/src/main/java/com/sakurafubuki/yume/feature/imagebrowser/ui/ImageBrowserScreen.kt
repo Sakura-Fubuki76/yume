@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.plus
 import androidx.compose.foundation.layout.size
@@ -87,9 +88,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.lerp
 import androidx.core.net.toUri
@@ -128,6 +132,7 @@ import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 import kotlin.math.pow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -179,6 +184,7 @@ object ImageViewerStore {
 private const val TAG = "ImageViewer"
 
 private const val SHARED_ELEMENT_BOUNDS_TIMEOUT_MS = 220L
+private val IMAGE_BROWSER_TOP_BAR_SCROLL_FALLBACK_HEIGHT = 112.dp
 private const val IMAGE_VIEWER_ARC_MIN_PX = 56f
 private const val IMAGE_VIEWER_ARC_MAX_PX = 220f
 private const val IMAGE_VIEWER_MEMORY_PRELOAD_RADIUS = 1
@@ -305,6 +311,15 @@ private fun ImageBrowserScreen(
     var showCloudServerSelectorDialog by rememberSaveable { mutableStateOf(false) }
     var showModeSwitchDialog by rememberSaveable { mutableStateOf(false) }
     var showStorageMenu by remember { mutableStateOf(false) }
+    var topBarHeightPx by remember { mutableIntStateOf(0) }
+    var topBarScrollProgress by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val topBarHeight = if (topBarHeightPx > 0) {
+        with(density) { topBarHeightPx.toDp() }
+    } else {
+        IMAGE_BROWSER_TOP_BAR_SCROLL_FALLBACK_HEIGHT
+    }
+    val topBarInteractive = topBarScrollProgress < 0.98f
 
     LaunchedEffect(permissionGranted) {
         if (permissionGranted) {
@@ -344,108 +359,39 @@ private fun ImageBrowserScreen(
         ImageViewerStore.imageCloudDiskCacheEnabled = uiState.preferences.imageCloudDiskCacheEnabled
     }
 
-    Scaffold(
-        topBar = {
-            NextTopAppBar(
-                title = when (uiState.mode) {
-                    MediaMode.LOCAL -> if (normalizePath(uiState.localPath) == "/") {
-                        stringResource(R.string.app_name)
-                    } else {
-                        currentFolder?.name ?: stringResource(R.string.app_name)
-                    }
-                    MediaMode.CLOUD -> if (normalizePath(uiState.cloudPath) == "/") {
-                        stringResource(R.string.app_name)
-                    } else {
-                        currentFolder?.name ?: selectedCloudServer?.name ?: stringResource(R.string.app_name)
-                    }
-                },
-                navigationIcon = {
-                    when {
-                        canNavigateCloudUp -> {
-                            FilledTonalIconButton(
-                                onClick = {
-                                    val parent = parentPath(uiState.cloudPath)
-                                    onNavigateBackFromPath(parent, selectedCloudServer.id)
-                                },
-                            ) {
-                                Icon(imageVector = NextIcons.ArrowBack, contentDescription = stringResource(R.string.navigate_up))
-                            }
-                        }
+    LaunchedEffect(currentGalleryState) {
+        if (currentGalleryState !is ImageGalleryUiState.Content) {
+            topBarScrollProgress = 0f
+        }
+    }
 
-                        canNavigateLocalUp -> {
-                            FilledTonalIconButton(
-                                onClick = {
-                                    val parent = localNavigateUpTarget(uiState.localPath, uiState.preferences.imageViewMode)
-                                    onEvent(ImageBrowserUiEvent.OpenLocalFolder(parent))
-                                    onNavigateBackFromPath(parent, null)
-                                },
-                            ) {
-                                Icon(imageVector = NextIcons.ArrowBack, contentDescription = stringResource(R.string.navigate_up))
-                            }
-                        }
-                    }
-                },
-                actions = {
-                    Box {
-                        IconButton(onClick = { showStorageMenu = true }) {
-                            Icon(
-                                imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Cloud else NextIcons.Folder,
-                                contentDescription = stringResource(R.string.switch_mode),
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = showStorageMenu,
-                            onDismissRequest = { showStorageMenu = false },
-                            shape = MaterialTheme.shapes.medium,
-                        ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (uiState.mode == MediaMode.CLOUD) {
-                                            stringResource(R.string.switch_to_local_mode)
-                                        } else {
-                                            stringResource(R.string.switch_to_cloud_mode)
-                                        },
-                                    )
-                                },
-                                onClick = {
-                                    showStorageMenu = false
-                                    showModeSwitchDialog = true
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Folder else NextIcons.Cloud,
-                                        contentDescription = null,
-                                    )
-                                },
-                            )
-                            if (uiState.mode == MediaMode.CLOUD) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.select_webdav_storage)) },
-                                    onClick = {
-                                        showStorageMenu = false
-                                        showCloudServerSelectorDialog = true
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = NextIcons.Settings,
-                                            contentDescription = null,
-                                        )
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    IconButton(onClick = { showQuickSettingsDialog = true }) {
-                        Icon(imageVector = NextIcons.DashBoard, contentDescription = stringResource(R.string.menu))
-                    }
-                },
-            )
-        },
-        containerColor = MaterialTheme.colorScheme.surfaceContainer,
-    ) { scaffoldPadding ->
+    LaunchedEffect(topBarInteractive) {
+        if (!topBarInteractive) {
+            showStorageMenu = false
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceContainer),
+    ) {
         val modeSwitchSpatialSpec = yumePageSpatialSpringSpec()
-        val contentScaffoldPadding = scaffoldPadding.copy(bottom = 0.dp)
+        val contentBackgroundOffsetPx = with(density) { topBarHeight.roundToPx() }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .offset {
+                    val offsetY = contentBackgroundOffsetPx * (1f - topBarScrollProgress.coerceIn(0f, 1f))
+                    IntOffset(x = 0, y = offsetY.roundToInt())
+                }
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
+                .background(MaterialTheme.colorScheme.background),
+        )
+        val mediaContentPadding = PaddingValues(
+            top = topBarHeight,
+            bottom = 8.dp,
+        )
         AnimatedContent(
             targetState = uiState.mode,
             transitionSpec = {
@@ -497,7 +443,10 @@ private fun ImageBrowserScreen(
                         onAddServer = onNavigateToSettings,
                         servers = emptyList(),
                         selectedServerId = null,
-                        modifier = Modifier.padding(contentScaffoldPadding),
+                        mediaContentPadding = mediaContentPadding,
+                        topBarScrollDistance = topBarHeight,
+                        onTopBarScrollProgressChanged = { topBarScrollProgress = it },
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
                 MediaMode.CLOUD -> FolderPane(
@@ -535,9 +484,124 @@ private fun ImageBrowserScreen(
                     cloudError = uiState.cloudError,
                     onLoadMore = { onEvent(ImageBrowserUiEvent.LoadNextCloudPage) },
                     onRetryLoadMore = { onEvent(ImageBrowserUiEvent.LoadNextCloudPage) },
-                    modifier = Modifier.padding(contentScaffoldPadding),
+                    mediaContentPadding = mediaContentPadding,
+                    topBarScrollDistance = topBarHeight,
+                    onTopBarScrollProgressChanged = { topBarScrollProgress = it },
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
+        }
+
+        if (topBarScrollProgress < 1f) {
+            NextTopAppBar(
+                modifier = Modifier
+                    .onSizeChanged { size -> topBarHeightPx = size.height }
+                    .offset {
+                        val offsetY = -topBarHeightPx * topBarScrollProgress.coerceIn(0f, 1f)
+                        IntOffset(x = 0, y = offsetY.roundToInt())
+                    },
+                title = when (uiState.mode) {
+                    MediaMode.LOCAL -> if (normalizePath(uiState.localPath) == "/") {
+                        stringResource(R.string.app_name)
+                    } else {
+                        currentFolder?.name ?: stringResource(R.string.app_name)
+                    }
+                    MediaMode.CLOUD -> if (normalizePath(uiState.cloudPath) == "/") {
+                        stringResource(R.string.app_name)
+                    } else {
+                        currentFolder?.name ?: selectedCloudServer?.name ?: stringResource(R.string.app_name)
+                    }
+                },
+                navigationIcon = {
+                    when {
+                        canNavigateCloudUp -> {
+                            FilledTonalIconButton(
+                                enabled = topBarInteractive,
+                                onClick = {
+                                    val parent = parentPath(uiState.cloudPath)
+                                    onNavigateBackFromPath(parent, selectedCloudServer.id)
+                                },
+                            ) {
+                                Icon(imageVector = NextIcons.ArrowBack, contentDescription = stringResource(R.string.navigate_up))
+                            }
+                        }
+
+                        canNavigateLocalUp -> {
+                            FilledTonalIconButton(
+                                enabled = topBarInteractive,
+                                onClick = {
+                                    val parent = localNavigateUpTarget(uiState.localPath, uiState.preferences.imageViewMode)
+                                    onEvent(ImageBrowserUiEvent.OpenLocalFolder(parent))
+                                    onNavigateBackFromPath(parent, null)
+                                },
+                            ) {
+                                Icon(imageVector = NextIcons.ArrowBack, contentDescription = stringResource(R.string.navigate_up))
+                            }
+                        }
+                    }
+                },
+                actions = {
+                    Box {
+                        IconButton(
+                            enabled = topBarInteractive,
+                            onClick = { showStorageMenu = true },
+                        ) {
+                            Icon(
+                                imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Cloud else NextIcons.Folder,
+                                contentDescription = stringResource(R.string.switch_mode),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showStorageMenu && topBarInteractive,
+                            onDismissRequest = { showStorageMenu = false },
+                            shape = MaterialTheme.shapes.medium,
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (uiState.mode == MediaMode.CLOUD) {
+                                            stringResource(R.string.switch_to_local_mode)
+                                        } else {
+                                            stringResource(R.string.switch_to_cloud_mode)
+                                        },
+                                    )
+                                },
+                                onClick = {
+                                    showStorageMenu = false
+                                    showModeSwitchDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = if (uiState.mode == MediaMode.CLOUD) NextIcons.Folder else NextIcons.Cloud,
+                                        contentDescription = null,
+                                    )
+                                },
+                            )
+                            if (uiState.mode == MediaMode.CLOUD) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.select_webdav_storage)) },
+                                    onClick = {
+                                        showStorageMenu = false
+                                        showCloudServerSelectorDialog = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            imageVector = NextIcons.Settings,
+                                            contentDescription = null,
+                                        )
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    IconButton(
+                        enabled = topBarInteractive,
+                        onClick = { showQuickSettingsDialog = true },
+                    ) {
+                        Icon(imageVector = NextIcons.DashBoard, contentDescription = stringResource(R.string.menu))
+                    }
+                },
+            )
         }
     }
 
@@ -604,6 +668,9 @@ private fun FolderPane(
     onAddServer: () -> Unit,
     servers: List<com.sakurafubuki.yume.core.model.WebDavServer>,
     selectedServerId: Int?,
+    mediaContentPadding: PaddingValues,
+    topBarScrollDistance: Dp,
+    onTopBarScrollProgressChanged: (Float) -> Unit,
     modifier: Modifier = Modifier,
     onProbeCloudDimensions: (String, Int, Int) -> Unit = { _, _, _ -> },
     cloudHasMore: Boolean = false,
@@ -627,6 +694,9 @@ private fun FolderPane(
                 onFolderClick = onFolderClick,
                 onMediaClick = onMediaClick,
                 onProbeCloudDimensions = onProbeCloudDimensions,
+                mediaContentPadding = mediaContentPadding,
+                topBarScrollDistance = topBarScrollDistance,
+                onTopBarScrollProgressChanged = onTopBarScrollProgressChanged,
                 modifier = modifier,
                 cloudHasMore = cloudHasMore,
                 cloudLoadingMore = cloudLoadingMore,
@@ -671,6 +741,9 @@ private fun FolderPane(
         onFolderClick = onFolderClick,
         onMediaClick = onMediaClick,
         onProbeCloudDimensions = onProbeCloudDimensions,
+        mediaContentPadding = mediaContentPadding,
+        topBarScrollDistance = topBarScrollDistance,
+        onTopBarScrollProgressChanged = onTopBarScrollProgressChanged,
         modifier = modifier,
         cloudHasMore = cloudHasMore,
         cloudLoadingMore = cloudLoadingMore,
@@ -741,6 +814,9 @@ private fun PaneContent(
     onFolderClick: (String) -> Unit,
     onMediaClick: (Uri) -> Unit,
     onProbeCloudDimensions: (String, Int, Int) -> Unit,
+    mediaContentPadding: PaddingValues,
+    topBarScrollDistance: Dp,
+    onTopBarScrollProgressChanged: (Float) -> Unit,
     modifier: Modifier = Modifier,
     cloudHasMore: Boolean = false,
     cloudLoadingMore: Boolean = false,
@@ -752,8 +828,7 @@ private fun PaneContent(
     PullToRefreshBox(
         modifier = modifier
             .fillMaxSize()
-            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
-            .background(MaterialTheme.colorScheme.background),
+            .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
         state = pullToRefreshState,
         isRefreshing = refreshing,
         onRefresh = onRefresh,
@@ -808,7 +883,9 @@ private fun PaneContent(
                     onFolderClick = onFolderClick,
                     onImageClick = onMediaClick,
                     onProbeCloudDimensions = onProbeCloudDimensions,
-                    contentPadding = PaddingValues(bottom = 8.dp),
+                    contentPadding = mediaContentPadding,
+                    topBarScrollDistance = topBarScrollDistance,
+                    onTopBarScrollProgressChanged = onTopBarScrollProgressChanged,
                     cloudHasMore = cloudHasMore,
                     cloudLoadingMore = cloudLoadingMore,
                     cloudError = cloudError,
@@ -832,6 +909,8 @@ private fun ImageMediaView(
     onImageClick: (Uri) -> Unit,
     onProbeCloudDimensions: (String, Int, Int) -> Unit,
     contentPadding: PaddingValues = PaddingValues(),
+    topBarScrollDistance: Dp = 0.dp,
+    onTopBarScrollProgressChanged: (Float) -> Unit = {},
     cloudHasMore: Boolean = false,
     cloudLoadingMore: Boolean = false,
     cloudError: String? = null,
@@ -840,6 +919,7 @@ private fun ImageMediaView(
 ) {
     val gridState = rememberLazyStaggeredGridState()
     val sharedElementRegistry = LocalSharedElementRegistry.current
+    val density = LocalDensity.current
 
     val contentHorizontalPadding = 8.dp
     val itemSpacing = if (preferences.imageLayoutMode == MediaLayoutMode.LIST) 8.dp else 4.dp
@@ -864,6 +944,20 @@ private fun ImageMediaView(
 
     LaunchedEffect(rootFolder.path) {
         gridState.scrollToItem(0)
+    }
+
+    LaunchedEffect(gridState, totalItems, density, topBarScrollDistance) {
+        val scrollDistancePx = with(density) { topBarScrollDistance.toPx() }
+            .coerceAtLeast(1f)
+        snapshotFlow {
+            when {
+                totalItems <= 0 -> 0f
+                gridState.firstVisibleItemIndex > 0 -> 1f
+                else -> gridState.firstVisibleItemScrollOffset.toFloat() / scrollDistancePx
+            }.coerceIn(0f, 1f)
+        }
+            .distinctUntilChanged()
+            .collect(onTopBarScrollProgressChanged)
     }
 
     LaunchedEffect(gridState, totalItems, cloudHasMore, cloudLoadingMore) {

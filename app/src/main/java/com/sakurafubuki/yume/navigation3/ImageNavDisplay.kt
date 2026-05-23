@@ -8,7 +8,6 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageBrowserRoute
-import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerRoute
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerStore
 
 @Composable
@@ -53,12 +52,5 @@ fun ImageNavDisplay(
                 }
             },
         )
-
-        if (ImageViewerStore.isViewerShowing) {
-            ImageViewerRoute(
-                initialIndex = ImageViewerStore.viewerIndex,
-                onBack = ImageViewerStore::hideViewer,
-            )
-        }
     }
 }
