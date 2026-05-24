@@ -47,9 +47,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -1585,41 +1585,9 @@ class MediaPickerViewModel @Inject constructor(
     ) {
         viewModelScope.launch(cloudAuxParent + Dispatchers.IO) {
             val normalizedPath = normalizePath(path)
-            val recurse = preferences.mediaViewMode == MediaViewMode.FOLDER_TREE
-            val metadataHrefs = buildSet {
-                if (recurse) {
-                    collectVideoHrefsFromCachedTree(
-                        server = server,
-                        parentPath = normalizedPath,
-                        items = items,
-                        visitedPaths = mutableSetOf(),
-                        collector = this,
-                    )
-                } else {
-                    items.cloudDisplayVideoFiles().forEach { item -> add(item.href) }
-                }
-            }.toList()
-            val folderPaths = buildSet {
-                add(normalizedPath)
-                if (recurse) {
-                    collectFolderPathsFromCachedTree(
-                        server = server,
-                        parentPath = normalizedPath,
-                        items = items,
-                        visitedPaths = mutableSetOf(),
-                        collector = this,
-                    )
-                } else {
-                    items.asSequence()
-                        .cloudDirectoryItems()
-                        .map { item -> normalizePath(resolveRelativePath(server, item.href)) }
-                        .forEach(::add)
-                }
-            }.toList()
-
             combine(
-                cloudVideoMetadataRepository.observeMetadata(server.id, metadataHrefs),
-                cloudVideoMetadataRepository.observeFolderMetadata(server.id, folderPaths),
+                cloudVideoMetadataRepository.observeMetadata(server.id),
+                cloudVideoMetadataRepository.observeFolderMetadata(server.id),
             ) { metadataMap, folderMetadataMap ->
                 metadataMap to folderMetadataMap
             }.collectLatest { (metadataMap, folderMetadataMap) ->

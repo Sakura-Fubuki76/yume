@@ -1459,7 +1459,7 @@ private fun ImageGridCell(
                     .fillMaxSize()
                     .graphicsLayer {
                         alpha = if (ImageViewerStore.heroTransitionImageUri == image.uriString) 0f else fadeInAlpha
-                },
+                    },
                 onLoading = {
                     if (!GridImageLoadMemory.contains(displayUri)) {
                         loadState = ImageCellLoadState.LOADING
