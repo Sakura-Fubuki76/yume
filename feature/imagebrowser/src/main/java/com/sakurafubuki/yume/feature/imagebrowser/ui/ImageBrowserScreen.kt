@@ -73,6 +73,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -220,6 +221,37 @@ private object ImageCellLoadState {
     const val SUCCESS = 1
     const val ERROR = 2
 }
+
+private data class ImageGridScrollPosition(
+    val index: Int,
+    val offset: Int,
+)
+
+private val ImageGridScrollPositionsSaver = Saver<MutableMap<String, ImageGridScrollPosition>, List<Any>>(
+    save = { positions ->
+        buildList(capacity = positions.size * 3) {
+            positions.forEach { (path, position) ->
+                add(path)
+                add(position.index)
+                add(position.offset)
+            }
+        }
+    },
+    restore = { saved ->
+        buildMap {
+            var index = 0
+            while (index + 2 < saved.size) {
+                val path = saved[index] as? String
+                val itemIndex = saved[index + 1] as? Int
+                val offset = saved[index + 2] as? Int
+                if (path != null && itemIndex != null && offset != null) {
+                    put(path, ImageGridScrollPosition(itemIndex, offset))
+                }
+                index += 3
+            }
+        }.toMutableMap()
+    },
+)
 
 internal object GridImageLoadMemory {
     private const val MAX_ENTRIES = 2000
@@ -922,7 +954,14 @@ private fun ImageMediaView(
     onLoadMore: () -> Unit = {},
     onRetryLoadMore: () -> Unit = {},
 ) {
+    val scrollPositions = rememberSaveable(saver = ImageGridScrollPositionsSaver) {
+        mutableMapOf<String, ImageGridScrollPosition>()
+    }
+    val scrollPositionKey = remember(isCloudMode, rootFolder.path) {
+        "${if (isCloudMode) "cloud" else "local"}:${rootFolder.path}"
+    }
     val gridState = rememberLazyStaggeredGridState()
+    var restoredScrollPositionKey by remember { mutableStateOf<String?>(null) }
     val sharedElementRegistry = LocalSharedElementRegistry.current
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -948,8 +987,31 @@ private fun ImageMediaView(
         mutableMapOf<String, Rect>()
     }
 
-    LaunchedEffect(rootFolder.path) {
-        gridState.scrollToItem(0)
+    LaunchedEffect(scrollPositionKey) {
+        restoredScrollPositionKey = null
+        val position = scrollPositions[scrollPositionKey] ?: ImageGridScrollPosition(0, 0)
+        val targetIndex = if (totalItems > 0) {
+            position.index.coerceIn(0, totalItems - 1)
+        } else {
+            0
+        }
+        gridState.scrollToItem(targetIndex, position.offset.coerceAtLeast(0))
+        restoredScrollPositionKey = scrollPositionKey
+    }
+
+    LaunchedEffect(gridState, scrollPositionKey) {
+        snapshotFlow {
+            ImageGridScrollPosition(
+                index = gridState.firstVisibleItemIndex,
+                offset = gridState.firstVisibleItemScrollOffset,
+            )
+        }
+            .distinctUntilChanged()
+            .collect { position ->
+                if (restoredScrollPositionKey == scrollPositionKey) {
+                    scrollPositions[scrollPositionKey] = position
+                }
+            }
     }
 
     LaunchedEffect(gridState, totalItems, density, topBarScrollDistance) {
@@ -1829,6 +1891,8 @@ fun ImageViewerRoute(
     var showHeroOverlay by remember { mutableStateOf(shouldPlayLaunchAnimation) }
     var animationReady by remember { mutableStateOf(false) }
     var hasPlayedLaunchTransition by remember { mutableStateOf(false) }
+    var isOpeningTransition by remember { mutableStateOf(false) }
+    var launchTransitionInterrupted by remember { mutableStateOf(false) }
     var isCloseOverlay by remember { mutableStateOf(false) }
     var overlayViewportRect by remember { mutableStateOf(Rect(0f, 0f, 1f, 1f)) }
     val swipeDismissThreshold = 0.15f
@@ -1857,6 +1921,7 @@ fun ImageViewerRoute(
 
     fun resetTransition() {
         swipeDismissProgress = 0f
+        isOpeningTransition = false
         isAwaitingRoutePop = false
         isTransitionRunning = false
         useFallbackCloseAnimation = false
@@ -1869,6 +1934,22 @@ fun ImageViewerRoute(
         transitionEndCorner = 0.dp
         ImageViewerStore.heroTransitionImageUri = null
         transitionEngine.finish()
+    }
+
+    fun currentHeroOverlayRect(): Rect? {
+        val start = transitionStartBounds
+        val end = transitionEndBounds
+        return if (showHeroOverlay && animationReady && !isCloseOverlay && start != null && end != null) {
+            interpolateRectWithArc(start, end, transitionEngine.progress.coerceIn(0f, 1f))
+        } else {
+            null
+        }
+    }
+
+    fun interruptLaunchTransitionForClose() {
+        if (!isOpeningTransition) return
+        launchTransitionInterrupted = true
+        isOpeningTransition = false
     }
 
     fun beginCloseTransition(
@@ -1938,12 +2019,14 @@ fun ImageViewerRoute(
         startRectOverride: Rect? = null,
     ): Boolean {
         if (hasConsumedBackNavigation || isAwaitingRoutePop) return false
+        val launchInterruptStartRect = startRectOverride ?: currentHeroOverlayRect()
+        interruptLaunchTransitionForClose()
         val currentUri = currentImageUri()
         val destinationBounds = resolveDestinationBounds(currentUri)
         beginCloseTransition(
             currentUri = currentUri,
             destinationBounds = destinationBounds,
-            startRectOverride = startRectOverride,
+            startRectOverride = launchInterruptStartRect,
             initialProgress = initialProgress,
         )
         showHeroOverlay = true
@@ -2010,20 +2093,32 @@ fun ImageViewerRoute(
         ImageViewerStore.heroTransitionImageUri = launchImageUri
         useFallbackCloseAnimation = false
         isCloseOverlay = false
+        launchTransitionInterrupted = false
+        isOpeningTransition = true
         isTransitionRunning = true
         showHeroOverlay = true
         animationReady = true
         transitionEngine.start(type = TransitionType.SharedElement, direction = Direction.Forward, initialProgress = 0f)
-        animate(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = IMAGE_VIEWER_OPEN_ANIMATION,
-        ) { value, _ ->
-            transitionEngine.updateProgress(value)
+        try {
+            animate(
+                initialValue = 0f,
+                targetValue = 1f,
+                animationSpec = IMAGE_VIEWER_OPEN_ANIMATION,
+            ) { value, _ ->
+                if (launchTransitionInterrupted) {
+                    throw CancellationException("Launch transition interrupted")
+                }
+                transitionEngine.updateProgress(value)
+            }
+        } catch (error: CancellationException) {
+            isOpeningTransition = false
+            if (!launchTransitionInterrupted) throw error
+            return@LaunchedEffect
         }
 
         withFrameNanos { }
 
+        isOpeningTransition = false
         resetTransition()
         ImageViewerStore.launchUri = null
         ImageViewerStore.launchOriginBounds = null
@@ -2052,28 +2147,35 @@ fun ImageViewerRoute(
                 return@PredictiveBackHandler
             }
 
-            if (!hasPlayedLaunchTransition || isTransitionRunning) {
-                transitionEngine.start(
-                    type = TransitionType.PredictiveBack,
-                    direction = Direction.Backward,
+            if (isOpeningTransition) {
+                val launchInterruptStartRect = currentHeroOverlayRect()
+                val started = startCloseTransition(
+                    trigger = CloseTrigger.PredictiveBack,
                     initialProgress = 0f,
                     isGestureDriven = true,
+                    startRectOverride = launchInterruptStartRect,
                 )
+                if (!started) return@PredictiveBackHandler
+
                 try {
                     progress.collect { backEvent ->
                         transitionEngine.updateProgress(backEvent.progress)
                     }
+                    animateCloseToEnd(transitionEngine.progress.coerceIn(0f, 1f))
                 } catch (_: CancellationException) {
+                    animate(
+                        initialValue = transitionEngine.progress.coerceIn(0f, 1f),
+                        targetValue = 0f,
+                        animationSpec = tween(durationMillis = 180, easing = LinearEasing),
+                    ) { value, _ ->
+                        transitionEngine.updateProgress(value)
+                    }
+                    resetTransition()
                 }
+                return@PredictiveBackHandler
+            }
 
-                animate(
-                    initialValue = transitionEngine.progress.coerceIn(0f, 1f),
-                    targetValue = 0f,
-                    animationSpec = tween(durationMillis = 200, easing = LinearEasing),
-                ) { value, _ ->
-                    transitionEngine.updateProgress(value)
-                }
-                transitionEngine.finish()
+            if (!hasPlayedLaunchTransition || isTransitionRunning) {
                 return@PredictiveBackHandler
             }
 
@@ -2146,7 +2248,11 @@ fun ImageViewerRoute(
         }
     }
 
-    BackHandler(enabled = !isTransitionRunning && !isAwaitingRoutePop && hasPlayedLaunchTransition) {
+    BackHandler(
+        enabled = !isAwaitingRoutePop &&
+            (hasPlayedLaunchTransition || isOpeningTransition) &&
+            (!isTransitionRunning || isOpeningTransition),
+    ) {
         scope.launch {
             closeWithSpring(trigger = CloseTrigger.BackPress, initialProgress = 0f)
         }
@@ -2228,10 +2334,10 @@ fun ImageViewerRoute(
                     onScaleChanged = { scale -> pageScales[page] = scale },
                     onMultiTouchChanged = { active -> isPinchActive = active },
                     enableSwipeToDismiss = page == pagerState.currentPage &&
-                        hasPlayedLaunchTransition &&
+                        (hasPlayedLaunchTransition || isOpeningTransition) &&
                         !isAwaitingRoutePop &&
-                        (!isTransitionRunning || isGestureDragInProgress) &&
-                        !heroOverlayActive &&
+                        (!isTransitionRunning || isOpeningTransition || isGestureDragInProgress) &&
+                        (!heroOverlayActive || isOpeningTransition) &&
                         !isPinchActive &&
                         currentPageScale <= 1.01f,
                     swipeDismissHeightPx = fullRect.height,
@@ -2248,13 +2354,15 @@ fun ImageViewerRoute(
                             val capturedProgress = dismissProgress.coerceIn(0f, 1f)
                             val immediateBounds = sharedElementRegistry.getBounds(currentUri)
                                 ?: sharedElementRegistry.getLastKnownBounds(currentUri)
+                            val startRect = currentHeroOverlayRect() ?: currentRect
+                            interruptLaunchTransitionForClose()
 
                             scope.launch {
                                 val resolvedBounds = immediateBounds ?: resolveDestinationBounds(currentUri)
                                 beginCloseTransition(
                                     currentUri = currentUri,
                                     destinationBounds = resolvedBounds,
-                                    startRectOverride = currentRect,
+                                    startRectOverride = startRect,
                                     initialProgress = capturedProgress,
                                 )
                                 showHeroOverlay = true
