@@ -97,6 +97,7 @@ import com.sakurafubuki.yume.feature.player.extensions.uriToSubtitleConfiguratio
 import com.sakurafubuki.yume.feature.player.extensions.videoZoom
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
+import java.util.LinkedHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -122,6 +123,8 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 private const val TAG = "PlayerService"
 private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
+private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
+private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
 
 @OptIn(UnstableApi::class)
 @AndroidEntryPoint
@@ -164,6 +167,17 @@ class PlayerService : MediaSessionService() {
 
     @Volatile
     private var webDavServersById: Map<Int, WebDavServer> = emptyMap()
+
+    private val remoteSubtitleProbeCacheLock = Any()
+    private val remoteSubtitleProbeCache = object : LinkedHashMap<String, RemoteSubtitleProbeCacheEntry>(
+        REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, RemoteSubtitleProbeCacheEntry>?,
+        ): Boolean = size > REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES
+    }
 
     private lateinit var okHttpClient: OkHttpClient
 
@@ -1216,6 +1230,12 @@ class PlayerService : MediaSessionService() {
         val excludeUrls = excludeSubs.mapNotNull { it.toString().takeIf { u -> u.startsWith("http") } }.toSet()
         val url = runCatching { videoUrl.toHttpUrl() }.getOrNull() ?: return@withContext emptyList()
 
+        val cacheKey = remoteSubtitleProbeCacheKey(url)
+        getCachedRemoteSubtitles(cacheKey)?.let { cached ->
+            Logger.d("PlayerService", "probeRemoteSubtitles: cache hit ${cached.size} subtitles")
+            return@withContext cached.filterNot { it.toString() in excludeUrls }
+        }
+
         val pathSegments = url.encodedPathSegments
         if (pathSegments.isEmpty()) return@withContext emptyList()
         val fileName = pathSegments.last()
@@ -1225,9 +1245,15 @@ class PlayerService : MediaSessionService() {
 
         val apiServer = findMatchingWebDavServer(url)
         if (apiServer != null) {
-            val apiResults = probeSubtitlesViaApi(url, baseName, excludeUrls)
-            Logger.d("PlayerService", "probeRemoteSubtitles: API found ${apiResults.size} subtitles")
-            if (apiResults.isNotEmpty()) return@withContext apiResults
+            val apiResult = probeSubtitlesViaApi(url, baseName)
+            Logger.d(
+                "PlayerService",
+                "probeRemoteSubtitles: API found ${apiResult.subtitles.size} subtitles authoritative=${apiResult.authoritative}",
+            )
+            if (apiResult.authoritative) {
+                putCachedRemoteSubtitles(cacheKey, apiResult.subtitles)
+                return@withContext apiResult.subtitles.filterNot { it.toString() in excludeUrls }
+            }
         }
 
         val candidateExtensions = listOf("ass", "ssa", "srt", "vtt", "ttml")
@@ -1252,6 +1278,7 @@ class PlayerService : MediaSessionService() {
             }
         }
         Logger.d("PlayerService", "probeRemoteSubtitles: found ${results.size} remote subtitles: $results")
+        putCachedRemoteSubtitles(cacheKey, results)
         results
     }
 
@@ -1259,11 +1286,10 @@ class PlayerService : MediaSessionService() {
     private suspend fun probeSubtitlesViaApi(
         url: HttpUrl,
         baseName: String,
-        excludeUrls: Set<String>,
-    ): List<Uri> {
+    ): RemoteSubtitleProbeResult {
         val server = findMatchingWebDavServer(url) ?: run {
             Logger.d("PlayerService", "probeSubtitlesViaApi: no matching server for $url")
-            return emptyList()
+            return RemoteSubtitleProbeResult(subtitles = emptyList(), authoritative = false)
         }
         val pathSegments = url.encodedPathSegments
         val apiDirPath = if (pathSegments.size <= 2) {
@@ -1273,19 +1299,24 @@ class PlayerService : MediaSessionService() {
         }
         Logger.d("PlayerService", "probeSubtitlesViaApi: server=${server.name}, baseName=$baseName, dir=$apiDirPath")
         val listResult = runCatching { openListApi.listDirectory(server, apiDirPath, page = 1, perPage = 2000, refresh = false) }
-        val items = listResult.getOrNull()?.getOrNull()?.content.orEmpty()
+            .getOrNull()
+        if (listResult == null || listResult.isFailure) {
+            Logger.d("PlayerService", "probeSubtitlesViaApi: listDir failed for $apiDirPath")
+            return RemoteSubtitleProbeResult(subtitles = emptyList(), authoritative = false)
+        }
+        val items = listResult.getOrNull()?.content.orEmpty()
         Logger.d(
             "PlayerService",
             "probeSubtitlesViaApi: listDir returned ${items.size} items, " +
-                "success=${listResult.getOrNull()?.isSuccess}, " +
-                "hasContent=${listResult.getOrNull()?.getOrNull()?.content != null}",
+                "success=${listResult.isSuccess}, " +
+                "hasContent=${listResult.getOrNull()?.content != null}",
         )
         val rootBaseUrl = Uri.parse(server.url).let { serverUri ->
             val authority = if (serverUri.port != -1) "${serverUri.host}:${serverUri.port}" else serverUri.host.orEmpty()
             "${serverUri.scheme}://$authority"
         }
         val decodedBase = Uri.decode(baseName)
-        return items.filter { item ->
+        val subtitles = items.filter { item ->
             if (item.is_dir) return@filter false
             val itemName = Uri.decode(item.name)
             val isSubExt = item.name.let { it.endsWith(".ass", true) || it.endsWith(".ssa", true) || it.endsWith(".srt", true) || it.endsWith(".vtt", true) || it.endsWith(".ttml", true) }
@@ -1299,8 +1330,9 @@ class PlayerService : MediaSessionService() {
                 .joinToString("/") { Uri.encode(Uri.decode(it)) }
             val rawPath = if (apiDirPath == "/") "/d/$encodedName" else "/d/$encodedDirPath/$encodedName"
             val signSuffix = if (item.sign.isNotBlank()) "?sign=${item.sign}" else ""
-            "$rootBaseUrl$rawPath$signSuffix".toUri().takeIf { it.toString() !in excludeUrls }
+            "$rootBaseUrl$rawPath$signSuffix".toUri()
         }
+        return RemoteSubtitleProbeResult(subtitles = subtitles, authoritative = true)
     }
 
     @SuppressLint("UseKtx")
@@ -1331,6 +1363,33 @@ class PlayerService : MediaSessionService() {
             }
         }
     }
+
+    private fun getCachedRemoteSubtitles(cacheKey: String): List<Uri>? = synchronized(remoteSubtitleProbeCacheLock) {
+        val entry = remoteSubtitleProbeCache[cacheKey] ?: return@synchronized null
+        if (System.currentTimeMillis() - entry.cachedAtMs > REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS) {
+            remoteSubtitleProbeCache.remove(cacheKey)
+            null
+        } else {
+            entry.subtitles
+        }
+    }
+
+    private fun putCachedRemoteSubtitles(cacheKey: String, subtitles: List<Uri>) {
+        synchronized(remoteSubtitleProbeCacheLock) {
+            remoteSubtitleProbeCache[cacheKey] = RemoteSubtitleProbeCacheEntry(
+                subtitles = subtitles,
+                cachedAtMs = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    private fun remoteSubtitleProbeCacheKey(url: HttpUrl): String = url.newBuilder()
+        .username("")
+        .password("")
+        .encodedQuery(null)
+        .fragment(null)
+        .build()
+        .toString()
 
     private fun buildAuthorizationHeader(url: HttpUrl): String? {
         findMatchingWebDavServer(url)?.let { matchedServer ->
@@ -1398,6 +1457,16 @@ class PlayerService : MediaSessionService() {
         return Credentials.basic(normalizedUsername, normalizedPassword)
     }
 }
+
+private data class RemoteSubtitleProbeResult(
+    val subtitles: List<Uri>,
+    val authoritative: Boolean,
+)
+
+private data class RemoteSubtitleProbeCacheEntry(
+    val subtitles: List<Uri>,
+    val cachedAtMs: Long,
+)
 
 @get:UnstableApi
 @set:UnstableApi
