@@ -105,6 +105,7 @@ import com.sakurafubuki.yume.feature.player.extensions.videoZoom
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import java.util.LinkedHashMap
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -149,6 +150,8 @@ class PlayerService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var artworkLoadJob: Job? = null
     private var prebufferJob: Job? = null
+    private val subtitleDiscoveryInFlight = ConcurrentHashMap.newKeySet<String>()
+    private val subtitleDiscoveryCompleted = ConcurrentHashMap.newKeySet<String>()
 
     @Volatile
     private var prebufferKey: String? = null
@@ -224,6 +227,7 @@ class PlayerService : MediaSessionService() {
             }
 
             mediaItem?.let { item ->
+                discoverSubtitlesForMediaItemAtCurrentIndex(item)
                 serviceScope.launch(Dispatchers.IO) {
                     resolveChaptersForMediaItem(item)
                 }
@@ -386,6 +390,7 @@ class PlayerService : MediaSessionService() {
                         )
                     }
                 }
+                maybeDiscoverNextMediaItemSubtitles()
                 maybePrebufferNext()
             }
         }
@@ -471,6 +476,7 @@ class PlayerService : MediaSessionService() {
         val nextIndex = player.currentMediaItemIndex + 1
         if (nextIndex >= player.mediaItemCount) return
         val nextItem = player.getMediaItemAt(nextIndex)
+        discoverSubtitlesForMediaItemAt(nextIndex, nextItem)
         val nextUrl = nextItem.mediaId
         if (!nextUrl.isHttpUrl()) return
         val nextKey = nextUrl
@@ -486,6 +492,62 @@ class PlayerService : MediaSessionService() {
                 length = NEXT_MEDIA_PREBUFFER_BYTES,
             )
         }
+    }
+
+    private fun maybeDiscoverNextMediaItemSubtitles() {
+        val player = mediaSession?.player ?: return
+        val nextIndex = player.currentMediaItemIndex + 1
+        if (nextIndex >= player.mediaItemCount) return
+        discoverSubtitlesForMediaItemAt(nextIndex, player.getMediaItemAt(nextIndex))
+    }
+
+    private fun discoverSubtitlesForMediaItemAtCurrentIndex(mediaItem: MediaItem) {
+        val player = mediaSession?.player ?: return
+        val currentIndex = player.currentMediaItemIndex.takeIf { it in 0 until player.mediaItemCount } ?: return
+        discoverSubtitlesForMediaItemAt(currentIndex, mediaItem)
+    }
+
+    private fun discoverSubtitlesForMediaItemAt(index: Int, mediaItem: MediaItem) {
+        val mediaId = mediaItem.mediaId.takeIf { it.isNotBlank() } ?: return
+        if (mediaId in subtitleDiscoveryCompleted) return
+        if (!subtitleDiscoveryInFlight.add(mediaId)) return
+
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val updatedMediaItem = updatedMediaItemWithMetadata(
+                    mediaItem = mediaItem,
+                    shouldDiscoverSubtitles = true,
+                )
+                withContext(Dispatchers.Main) {
+                    val player = mediaSession?.player ?: return@withContext
+                    if (index !in 0 until player.mediaItemCount) return@withContext
+                    val currentItemAtIndex = player.getMediaItemAt(index)
+                    if (currentItemAtIndex.mediaId != mediaId) return@withContext
+                    if (currentItemAtIndex == updatedMediaItem) return@withContext
+
+                    if (index == player.currentMediaItemIndex) {
+                        player.replaceCurrentMediaItemPreservingPosition(
+                            updatedMediaItem.copy(positionMs = player.currentPosition),
+                        )
+                    } else {
+                        player.replaceMediaItem(index, updatedMediaItem)
+                    }
+                }
+                subtitleDiscoveryCompleted.add(mediaId)
+            } finally {
+                subtitleDiscoveryInFlight.remove(mediaId)
+            }
+        }
+    }
+
+    private fun Player.replaceCurrentMediaItemPreservingPosition(updatedMediaItem: MediaItem) {
+        val index = currentMediaItemIndex.takeIf { it in 0 until mediaItemCount } ?: return
+        val positionMs = currentPosition.coerceAtLeast(0L)
+        val shouldPlayWhenReady = playWhenReady
+        addMediaItem(index + 1, updatedMediaItem)
+        seekTo(index + 1, positionMs)
+        removeMediaItem(index)
+        playWhenReady = shouldPlayWhenReady
     }
 
     private fun prefetchScrubKeyframe() {
@@ -574,6 +636,9 @@ class PlayerService : MediaSessionService() {
                 mediaItems = mediaItems,
                 subtitleDiscoveryIndex = subtitleDiscoveryIndex,
             )
+            subtitleDiscoveryIndex?.let { index ->
+                updatedMediaItems.getOrNull(index)?.mediaId?.let(subtitleDiscoveryCompleted::add)
+            }
             return@future MediaSession.MediaItemsWithStartPosition(updatedMediaItems, startIndex, startPositionMs)
         }
 
@@ -583,6 +648,7 @@ class PlayerService : MediaSessionService() {
             mediaItems: MutableList<MediaItem>,
         ): ListenableFuture<MutableList<MediaItem>> = serviceScope.future(Dispatchers.Default) {
             val updatedMediaItems = updatedMediaItemsWithMetadata(mediaItems)
+            updatedMediaItems.forEach { subtitleDiscoveryCompleted.add(it.mediaId) }
             return@future updatedMediaItems.toMutableList()
         }
 
@@ -1090,13 +1156,18 @@ class PlayerService : MediaSessionService() {
                 selectedSubtitleUri = bestCandidateUri,
             )
         }
-        val subConfigurations = nonAssUris.map { subtitleUri ->
-            uriToSubtitleConfiguration(
-                uri = subtitleUri,
-                subtitleEncoding = playerPreferences.subtitleTextEncoding,
-                isSelected = subtitleUri == bestCandidateUri,
-            )
-        }
+        val existingSubConfigurationKeys = existingSubConfigurations
+            .flatMap { config -> listOfNotNull(config.id, config.uri.toString()) }
+            .toSet()
+        val subConfigurations = nonAssUris
+            .filterNot { subtitleUri -> subtitleUri.toString() in existingSubConfigurationKeys }
+            .map { subtitleUri ->
+                uriToSubtitleConfiguration(
+                    uri = subtitleUri,
+                    subtitleEncoding = playerPreferences.subtitleTextEncoding,
+                    isSelected = subtitleUri == bestCandidateUri,
+                )
+            }
 
         val existingArtworkUri = mediaItem.mediaMetadata.artworkUri
         val isDefaultArtwork = existingArtworkUri != null && existingArtworkUri.scheme == ContentResolver.SCHEME_ANDROID_RESOURCE
