@@ -188,7 +188,8 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
 
                 val (apiThumbItems, localThumbItems) = videoItems.partition { it.apiThumbnailUrl != null }
                 if (apiThumbItems.isNotEmpty()) {
-                    val apiEntities = apiThumbItems
+                    val apiMetadataSemaphore = Semaphore(metadataConcurrency())
+                    apiThumbItems
                         .filter { item ->
                             val cached = existing[item.href]
                             val hasValidThumbnail = cached?.thumbnailPath?.let { path ->
@@ -198,37 +199,38 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                         }
                         .map { item ->
                             async {
-                                val extension = item.name.substringAfterLast('.', "")
-                                val rawUrl = item.rawVideoUrl
-                                Logger.d(TAG, "[API_THUMB] name=${item.name} rawUrl=${rawUrl?.take(100)}...")
-                                val durationMs = if (rawUrl != null) {
-                                    probeVideoDurationMs(rawUrl, okHttpClient, extension, mp4KeyframeExtractor) ?: 0L
-                                } else {
-                                    0L
-                                }
-                                Logger.d(TAG, "[API_THUMB] name=${item.name} durationMs=$durationMs")
+                                apiMetadataSemaphore.withPermit {
+                                    val extension = item.name.substringAfterLast('.', "")
+                                    val rawUrl = item.rawVideoUrl
+                                    Logger.d(TAG, "[API_THUMB] name=${item.name} rawUrl=${rawUrl?.take(100)}...")
+                                    val durationMs = if (rawUrl != null) {
+                                        probeVideoDurationMs(rawUrl, okHttpClient, extension, mp4KeyframeExtractor) ?: 0L
+                                    } else {
+                                        0L
+                                    }
+                                    Logger.d(TAG, "[API_THUMB] name=${item.name} durationMs=$durationMs")
 
-                                val localThumbPath = item.apiThumbnailUrl?.let { url ->
-                                    downloadApiThumbnail(url, "${server.id}|${item.href}")
+                                    val localThumbPath = item.apiThumbnailUrl?.let { url ->
+                                        downloadApiThumbnail(url, "${server.id}|${item.href}")
+                                    }
+                                    WebDavVideoMetadataEntity(
+                                        serverId = server.id,
+                                        href = item.href,
+                                        durationMs = durationMs,
+                                        thumbnailPath = localThumbPath ?: item.apiThumbnailUrl,
+                                        width = item.width ?: 0,
+                                        height = item.height ?: 0,
+                                        updatedAt = now,
+                                    ).also { entity ->
+                                        webDavVideoMetadataDao.upsertAll(listOf(entity))
+                                        synchronized(existingLock) {
+                                            existing[entity.href] = entity
+                                        }
+                                    }
                                 }
-                                WebDavVideoMetadataEntity(
-                                    serverId = server.id,
-                                    href = item.href,
-                                    durationMs = durationMs,
-                                    thumbnailPath = localThumbPath ?: item.apiThumbnailUrl,
-                                    width = item.width ?: 0,
-                                    height = item.height ?: 0,
-                                    updatedAt = now,
-                                )
                             }
                         }
                         .awaitAll()
-                    if (apiEntities.isNotEmpty()) {
-                        webDavVideoMetadataDao.upsertAll(apiEntities)
-                        for (entity in apiEntities) {
-                            existing[entity.href] = entity
-                        }
-                    }
                 }
 
                 if (localThumbItems.isEmpty()) {
