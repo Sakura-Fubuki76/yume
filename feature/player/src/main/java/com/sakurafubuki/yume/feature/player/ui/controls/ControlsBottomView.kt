@@ -164,12 +164,17 @@ fun ControlsBottomView(
                     } else {
                         0f
                     }
+                    val chapterTitle = chapters
+                        .firstOrNull { seekPosition in it.startTimeMs..<it.endTimeMs }
+                        ?.title
+                        ?.takeIf { it.isNotBlank() }
                     ThumbnailPreview(
                         spriteSheet = sheet.bitmap,
                         metadata = sheet.metadata,
                         frameIndex = frameIndex,
                         seekFraction = fraction,
                         parentWidth = parentWidthPx,
+                        chapterTitle = chapterTitle,
                     )
                 }
             }

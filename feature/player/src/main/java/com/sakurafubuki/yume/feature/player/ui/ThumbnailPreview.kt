@@ -3,11 +3,16 @@ package com.sakurafubuki.yume.feature.player.ui
 import android.graphics.Bitmap
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -15,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -30,6 +36,7 @@ fun ThumbnailPreview(
     seekFraction: Float,
     parentWidth: Float,
     modifier: Modifier = Modifier,
+    chapterTitle: String? = null,
 ) {
     val density = LocalDensity.current
 
@@ -46,7 +53,10 @@ fun ThumbnailPreview(
 
     val previewWidthPx = with(density) { previewWidthDp.dp.toPx() }
     val previewHeightPx = with(density) { previewHeightDp.dp.toPx() }
-    val totalHeightPx = previewHeightPx
+
+    val titleHeightDp = if (chapterTitle != null) 22.dp else 0.dp
+    val titleHeightPx = with(density) { titleHeightDp.toPx() }
+    val titleGapPx = with(density) { if (chapterTitle != null) 4.dp.toPx() else 0f }
 
     val rawOffsetX = (seekFraction * parentWidth) - (previewWidthPx / 2f)
     val clampedOffsetX = rawOffsetX.coerceIn(0f, parentWidth - previewWidthPx)
@@ -77,6 +87,24 @@ fun ThumbnailPreview(
                     dstSize = IntSize(previewWidthPx.roundToInt(), previewHeightPx.roundToInt()),
                 )
             }
+
+            if (chapterTitle != null) {
+                Box(
+                    modifier = Modifier
+                        .width(previewWidthDp.dp)
+                        .height(titleHeightDp)
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = chapterTitle,
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         },
     ) { measurables, constraints ->
         val looseConstraints = Constraints(
@@ -88,10 +116,18 @@ fun ThumbnailPreview(
         val placeables = measurables.map { it.measure(looseConstraints) }
 
         layout(width = constraints.maxWidth, height = 0) {
+            val thumbnailY = -previewHeightPx.roundToInt()
             placeables.getOrNull(0)?.placeRelative(
                 x = clampedOffsetX.roundToInt(),
-                y = -totalHeightPx.roundToInt(),
+                y = thumbnailY,
             )
+            if (placeables.size > 1) {
+                val titleY = (-previewHeightPx - titleGapPx - titleHeightPx).roundToInt()
+                placeables[1].placeRelative(
+                    x = clampedOffsetX.roundToInt(),
+                    y = titleY,
+                )
+            }
         }
     }
 }
