@@ -26,6 +26,7 @@ import com.sakurafubuki.yume.core.common.extensions.stripUserInfoFromHttpUrl
 import com.sakurafubuki.yume.core.data.cache.CloudDirectoryItemCache
 import com.sakurafubuki.yume.core.data.openlist.FsSearchItem
 import com.sakurafubuki.yume.core.data.openlist.OpenListApi
+import com.sakurafubuki.yume.core.data.openlist.toAbsoluteUrl
 import com.sakurafubuki.yume.core.data.openlist.toApiPath
 import com.sakurafubuki.yume.core.data.openlist.toWebDavMediaItem
 import com.sakurafubuki.yume.core.data.repository.LibyuvBitmapDecoder
@@ -129,12 +130,10 @@ class ImageBrowserViewModel @Inject constructor(
     }
 
     private fun createImageBrowserLoader(context: Context): ImageLoader {
-        val percent = preferencesRepository.applicationPreferences.value.imageBrowserMemoryCachePercent
-            .coerceIn(
-                ApplicationPreferences.MIN_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                ApplicationPreferences.MAX_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-            )
-        val cacheBytes = ImageCacheManager.memoryCacheBytesFromRamPercent(context, percent)
+        val cacheBytes = ImageCacheManager.memoryCacheBytesFromRamPercent(
+            context,
+            ApplicationPreferences.DEFAULT_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
+        )
         return ImageLoader.Builder(context)
             .memoryCache {
                 MemoryCache.Builder()
@@ -465,8 +464,8 @@ class ImageBrowserViewModel @Inject constructor(
         cloudLoadJob = viewModelScope.launch {
             val perPage = 50
             if (!refreshing) {
-                if (server.isImageHosting && effectiveImageViewMode(preferences.imageViewMode).showsImagesOnly()) {
-                    publishCachedImageHostingImages(
+                if (server.isImageHosting) {
+                    publishCachedImageHostingSnapshot(
                         server = server,
                         path = path,
                         preferences = preferences,
@@ -490,6 +489,15 @@ class ImageBrowserViewModel @Inject constructor(
                     preferences = preferences,
                     requestToken = requestToken,
                     refreshing = refreshing,
+                )
+                return@launch
+            }
+            if (server.isImageHosting) {
+                loadImageHostingFolderSnapshot(
+                    server = server,
+                    path = path,
+                    preferences = preferences,
+                    requestToken = requestToken,
                 )
                 return@launch
             }
@@ -529,6 +537,7 @@ class ImageBrowserViewModel @Inject constructor(
                             folder = displayFolder,
                             preferences = preferences,
                             requestToken = requestToken,
+                            refreshPreviewItems = refreshing,
                         )
                     }
                 }
@@ -549,7 +558,12 @@ class ImageBrowserViewModel @Inject constructor(
                         cloudDirectoryItemCache.put(server.id, path, items)
                     }
                     val sourceFolder = mapCloudFolder(server = server, path = apiPath, preferences = preferences, items = items)
-                    val rawFolder = resolveCloudLeafFolders(server = server, folder = sourceFolder, preferences = preferences)
+                    val rawFolder = resolveCloudLeafFolders(
+                        server = server,
+                        folder = sourceFolder,
+                        preferences = preferences,
+                        refreshPreviewItems = refreshing || server.isImageHosting,
+                    )
                     val folder = enrichFolderWithDbMetadata(server.id, rawFolder)
                     val total = data.total
                     val hasMore = 1 * perPage < total
@@ -587,7 +601,7 @@ class ImageBrowserViewModel @Inject constructor(
                     }
 
                     val dimensionTargets = if (server.isImageHosting) {
-                        collectMissingDimensionTargets(displayFolder).take(imageHostingDimensionProbeLimit(preferences, perPage))
+                        collectMissingDimensionTargets(displayFolder).take(perPage)
                     } else {
                         collectMissingDimensionTargets(displayFolder)
                     }
@@ -610,19 +624,10 @@ class ImageBrowserViewModel @Inject constructor(
                                 folder = folder,
                                 preferences = preferences,
                                 requestToken = requestToken,
+                                refreshPreviewItems = refreshing || server.isImageHosting,
                             )
                         }
                     }
-                    preloadCloudPagesAhead(
-                        server = server,
-                        path = path,
-                        currentFolder = displayFolder,
-                        currentPage = 1,
-                        perPage = perPage,
-                        totalItems = total,
-                        preferences = preferences,
-                        requestToken = requestToken,
-                    )
                 }
                 .onFailure { error ->
                     if (error is CancellationException || requestToken != cloudLoadRequestToken) return@onFailure
@@ -670,11 +675,13 @@ class ImageBrowserViewModel @Inject constructor(
                     val newItems = data.content.orEmpty().map { it.toWebDavMediaItem(server, apiPath) }
 
                     val newFolder = mapCloudFolder(server = server, path = apiPath, preferences = preferences, items = newItems)
-                    preloadCloudPageAssets(newFolder, preferences)
                     val currentContent = uiStateInternal.value.cloudGalleryState as? ImageGalleryUiState.Content
-                    val folder = currentContent?.folder?.copy(
-                        mediaList = currentContent.folder.mediaList + newFolder.mediaList,
-                    ) ?: enrichFolderWithDbMetadata(server.id, newFolder)
+                    val sort = imageSort(preferences)
+                    val folder = if (currentContent != null) {
+                        appendCloudPageFolder(server.id, currentContent.folder, newFolder, sort)
+                    } else {
+                        enrichFolderWithDbMetadata(server.id, newFolder.sortedLocally(sort))
+                    }
                     val total = data.total
                     val hasMore = nextPage * perPage < total
                     uiStateInternal.update {
@@ -689,7 +696,7 @@ class ImageBrowserViewModel @Inject constructor(
                     }
 
                     val dimensionTargets = if (server.isImageHosting) {
-                        collectMissingDimensionTargets(folder).take(imageHostingDimensionProbeLimit(preferences, perPage))
+                        collectMissingDimensionTargets(folder).take(perPage)
                     } else {
                         collectMissingDimensionTargets(folder)
                     }
@@ -701,17 +708,6 @@ class ImageBrowserViewModel @Inject constructor(
                             )
                         }
                     }
-
-                    preloadCloudPagesAhead(
-                        server = server,
-                        path = path,
-                        currentFolder = folder,
-                        currentPage = nextPage,
-                        perPage = perPage,
-                        totalItems = total,
-                        preferences = preferences,
-                        requestToken = cloudLoadRequestToken,
-                    )
                 }
                 .onFailure { error ->
                     if (error is CancellationException) return@onFailure
@@ -738,23 +734,14 @@ class ImageBrowserViewModel @Inject constructor(
         val apiPath = server.toApiPath(path)
         val cacheKey = imageHostingSearchCacheKey(server.id, path)
         val searchResult = runCatching {
-            val cachedItems = if (!refreshing) imageHostingSearchCache[cacheKey] else null
+            val cachedItems = if (append && !refreshing) imageHostingSearchCache[cacheKey] else null
             if (cachedItems != null) {
                 FsSearchDataSnapshot(total = cachedItems.size, content = cachedItems)
             } else {
-                val data = openListApi.search(
+                loadImageHostingSearchSnapshot(
                     server = server,
-                    parent = apiPath,
-                    keywords = "",
-                    scope = 2,
-                    page = 1,
-                    perPage = IMAGE_HOSTING_INDEX_ALL_COUNT,
-                ).getOrThrow()
-                val content = data.content.orEmpty()
-                imageHostingSearchCache[cacheKey] = content
-                FsSearchDataSnapshot(
-                    total = data.total.takeIf { it > 0 } ?: content.size,
-                    content = content,
+                    apiPath = apiPath,
+                    cacheKey = cacheKey,
                 )
             }
         }
@@ -781,15 +768,7 @@ class ImageBrowserViewModel @Inject constructor(
                         )
                     }
                     .orderedCloudVideos(server, sort)
-                val currentFolder = (uiStateInternal.value.cloudGalleryState as? ImageGalleryUiState.Content)?.folder
-                val cachedSnapshotImages = currentFolder
-                    ?.takeIf { !append && normalizePath(it.path) == normalizePath(path) && images.isEmpty() }
-                    ?.mediaList
-                    .orEmpty()
-                val sortedImages = when {
-                    cachedSnapshotImages.isNotEmpty() -> images + cachedSnapshotImages
-                    else -> images
-                }
+                val sortedImages = images
                     .distinctBy { stableCacheKey(it.uriString) }
                     .orderedCloudVideos(server, sort)
                 val total = maxOf(data.total, sortedImages.size)
@@ -833,7 +812,7 @@ class ImageBrowserViewModel @Inject constructor(
                     saveCurrentImageFolderMetadataToDb(server, folder)
                 }
                 val dimensionTargets = collectMissingDimensionTargets(folder)
-                    .take(imageHostingDimensionProbeLimit(preferences, perPage))
+                    .take(perPage)
                 if (dimensionTargets.isNotEmpty()) {
                     viewModelScope.launch {
                         probeMissingCloudDimensions(
@@ -841,17 +820,6 @@ class ImageBrowserViewModel @Inject constructor(
                             concurrency = IMAGE_HOSTING_DIMENSION_PROBE_CONCURRENCY,
                         )
                     }
-                }
-                if (!append) {
-                    preloadImageHostingImagePagesAhead(
-                        server = server,
-                        path = path,
-                        currentPage = page,
-                        perPage = perPage,
-                        totalItems = total,
-                        preferences = preferences,
-                        requestToken = requestToken,
-                    )
                 }
             }
             .onFailure { error ->
@@ -867,68 +835,155 @@ class ImageBrowserViewModel @Inject constructor(
             }
     }
 
-    private fun preloadImageHostingImagePagesAhead(
+    private suspend fun loadImageHostingSearchSnapshot(
         server: WebDavServer,
-        path: String,
-        currentPage: Int,
-        perPage: Int,
-        totalItems: Int,
-        preferences: ApplicationPreferences,
-        requestToken: Long,
-    ) {
-        val pagesToPreload = preferences.imageBrowserPreloadPageCount.coerceIn(
-            ApplicationPreferences.MIN_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
-            ApplicationPreferences.MAX_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
-        )
-        if (pagesToPreload <= 0 || currentPage * perPage >= totalItems) return
-
-        Logger.d(
-            TAG,
-            "imageHostingPreload start currentPage=$currentPage pages=$pagesToPreload perPage=$perPage total=$totalItems",
-        )
-        viewModelScope.launch(Dispatchers.IO) {
-            var page = currentPage
-            repeat(pagesToPreload) {
-                if (requestToken != cloudLoadRequestToken || page * perPage >= totalItems) return@launch
-                page += 1
-                loadImageHostingImagePage(
-                    server = server,
-                    path = path,
-                    page = page,
-                    perPage = perPage,
-                    preferences = preferences,
-                    requestToken = requestToken,
-                    append = true,
-                )
+        apiPath: String,
+        cacheKey: String,
+    ): FsSearchDataSnapshot {
+        val collected = mutableListOf<FsSearchItem>()
+        var page = 1
+        var total = 0
+        while (collected.size < IMAGE_HOSTING_SEARCH_MAX_RESULTS) {
+            val data = openListApi.search(
+                server = server,
+                parent = apiPath,
+                keywords = "",
+                scope = 2,
+                page = page,
+                perPage = IMAGE_HOSTING_SEARCH_PAGE_SIZE,
+            ).getOrThrow()
+            val content = data.content.orEmpty()
+            if (page == 1) {
+                total = data.total.takeIf { it > 0 } ?: content.size
             }
+            if (content.isEmpty()) break
+            collected += content
+            if (collected.size >= total || content.size < IMAGE_HOSTING_SEARCH_PAGE_SIZE) break
+            page += 1
         }
-    }
-
-    private fun imageHostingDimensionProbeLimit(
-        preferences: ApplicationPreferences,
-        perPage: Int,
-    ): Int {
-        val pagesToPreload = preferences.imageBrowserPreloadPageCount.coerceIn(
-            ApplicationPreferences.MIN_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
-            ApplicationPreferences.MAX_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
+        imageHostingSearchCache[cacheKey] = collected
+        return FsSearchDataSnapshot(
+            total = total.takeIf { it > 0 } ?: collected.size,
+            content = collected,
         )
-        return perPage * (pagesToPreload + 1)
     }
 
     private fun imageHostingImageSnapshotPath(path: String): String = "$IMAGE_HOSTING_IMAGE_SNAPSHOT_PREFIX${normalizePath(path)}"
 
     private fun imageHostingSearchCacheKey(serverId: Int, path: String): String = "$serverId:${normalizePath(path)}"
 
-    private suspend fun publishCachedImageHostingImages(
+    private suspend fun publishCachedImageHostingSnapshot(
         server: WebDavServer,
         path: String,
         preferences: ApplicationPreferences,
         requestToken: Long,
     ) {
         val cachedItems = cloudDirectoryItemCache.get(server.id, imageHostingImageSnapshotPath(path))
-        if (cachedItems.isEmpty()) return
+        if (cachedItems.isEmpty() || requestToken != cloudLoadRequestToken) return
+        val folder = buildImageHostingFolderFromItems(
+            server = server,
+            path = path,
+            preferences = preferences,
+            items = cachedItems,
+        ).let { enrichFolderWithDbMetadata(server.id, it, replaceExistingCover = false) }
+        if (folder.folderList.isEmpty() && folder.mediaList.isEmpty()) return
+        if (requestToken != cloudLoadRequestToken) return
+
+        uiStateInternal.update {
+            it.copy(
+                cloudGalleryState = ImageGalleryUiState.Content(folder),
+                cloudPage = 1,
+                cloudHasMore = effectiveImageViewMode(preferences.imageViewMode).showsImagesOnly() &&
+                    folder.mediaCount > folder.mediaList.size,
+                cloudTotalItems = folder.folderList.size + folder.mediaCount,
+                cloudLoadingMore = false,
+                cloudLoadingPhase = ImageCloudLoadingPhase.REFRESHING_REMOTE,
+                cloudError = null,
+            )
+        }
+    }
+
+    private suspend fun loadImageHostingFolderSnapshot(
+        server: WebDavServer,
+        path: String,
+        preferences: ApplicationPreferences,
+        requestToken: Long,
+    ) {
+        val apiPath = server.toApiPath(path)
+        val cacheKey = imageHostingSearchCacheKey(server.id, path)
+        runCatching {
+            loadImageHostingSearchSnapshot(
+                server = server,
+                apiPath = apiPath,
+                cacheKey = cacheKey,
+            )
+        }
+            .onSuccess { data ->
+                if (requestToken != cloudLoadRequestToken) return@onSuccess
+                val items = data.content
+                    .filter { it.isIndexedCloudImageFile() }
+                    .map { item ->
+                        item.toSyntheticImageWebDavMediaItem(
+                            server = server,
+                            parentPath = normalizePath(item.parent),
+                        )
+                    }
+                val folder = buildImageHostingFolderFromItems(
+                    server = server,
+                    path = path,
+                    preferences = preferences,
+                    items = items,
+                ).let { enrichFolderWithDbMetadata(server.id, it, replaceExistingCover = false) }
+                uiStateInternal.update {
+                    it.copy(
+                        cloudGalleryState = if (folder.folderList.isEmpty() && folder.mediaList.isEmpty()) {
+                            ImageGalleryUiState.Empty
+                        } else {
+                            ImageGalleryUiState.Content(folder)
+                        },
+                        cloudPage = 1,
+                        cloudHasMore = false,
+                        cloudTotalItems = folder.folderList.size + folder.mediaList.size,
+                        cloudLoadingMore = false,
+                        cloudRefreshing = false,
+                        cloudError = null,
+                    )
+                }
+                viewModelScope.launch(Dispatchers.IO) {
+                    saveImageHostingImageItemsSnapshot(server.id, path, items, append = false)
+                    saveCurrentImageFolderMetadataToDb(server, folder)
+                }
+                val dimensionTargets = collectMissingDimensionTargets(folder).take(50)
+                if (dimensionTargets.isNotEmpty()) {
+                    viewModelScope.launch {
+                        probeMissingCloudDimensions(
+                            targets = dimensionTargets,
+                            concurrency = IMAGE_HOSTING_DIMENSION_PROBE_CONCURRENCY,
+                        )
+                    }
+                }
+            }
+            .onFailure { error ->
+                if (error is CancellationException || requestToken != cloudLoadRequestToken) return@onFailure
+                uiStateInternal.update {
+                    it.copy(
+                        cloudGalleryState = ImageGalleryUiState.Error(formatCloudErrorMessage(error), error),
+                        cloudLoadingMore = false,
+                        cloudRefreshing = false,
+                        cloudError = formatCloudErrorMessage(error),
+                    )
+                }
+            }
+    }
+
+    private suspend fun buildImageHostingFolderFromItems(
+        server: WebDavServer,
+        path: String,
+        preferences: ApplicationPreferences,
+        items: List<WebDavMediaItem>,
+    ): Folder {
         val sort = imageSort(preferences)
-        val images = cachedItems
+        val images = items
             .filter { it.isImage }
             .map { item ->
                 val parentPath = normalizePath(resolveRelativePath(server, item.href).substringBeforeLast('/', path))
@@ -938,32 +993,130 @@ class ImageBrowserViewModel @Inject constructor(
                     item = item,
                 )
             }
+            .distinctBy { stableCacheKey(it.uriString) }
             .orderedCloudVideos(server, sort)
-        if (images.isEmpty() || requestToken != cloudLoadRequestToken) return
-
-        val folder = Folder(
-            name = cloudFolderDisplayName(server, path),
-            path = normalizePath(path),
-            dateModified = images.maxOfOrNull { it.dateModified } ?: System.currentTimeMillis(),
-            mediaList = images,
-            folderList = emptyList(),
-            mediaCount = images.size,
-            folderCount = 0,
-            cachedMediaSize = images.sumOf { it.size },
+        return buildImageHostingFolderFromVideos(
+            server = server,
+            path = path,
+            preferences = preferences,
+            images = images,
         )
-        uiStateInternal.update {
-            it.copy(
-                cloudGalleryState = ImageGalleryUiState.Content(folder),
-                cloudPage = 1,
-                cloudHasMore = false,
-                cloudTotalItems = images.size,
-                cloudLoadingMore = false,
-                cloudRefreshing = false,
-                cloudLoadingPhase = ImageCloudLoadingPhase.REFRESHING_REMOTE,
-                cloudError = null,
+    }
+
+    private fun buildImageHostingFolderFromVideos(
+        server: WebDavServer,
+        path: String,
+        preferences: ApplicationPreferences,
+        images: List<Video>,
+    ): Folder {
+        val normalizedPath = normalizePath(path)
+        val sort = imageSort(preferences)
+        val viewMode = effectiveImageViewMode(preferences.imageViewMode)
+        val videosByParent = images.groupBy { normalizePath(it.parentPath) }
+        val folderChildren = when (viewMode) {
+            MediaViewMode.FOLDERS ->
+                videosByParent
+                    .filterKeys { parentPath ->
+                        parentPath != normalizedPath && isDescendantPath(parentPath, normalizedPath)
+                    }
+                    .map { (folderPath, imagesInFolder) ->
+                        val sortedImages = imagesInFolder.orderedCloudVideos(server, sort)
+                        Folder(
+                            name = folderPath.substringAfterLast('/'),
+                            path = folderPath,
+                            parentPath = folderPath.substringBeforeLast('/', ROOT_PATH).ifBlank { ROOT_PATH },
+                            dateModified = sortedImages.maxOfOrNull { it.dateModified } ?: 0L,
+                            coverMedia = sortedImages.firstOrNull(),
+                            mediaCount = sortedImages.size,
+                            cachedMediaSize = sortedImages.sumOf { it.size },
+                        )
+                    }
+                    .orderedCloudFolders(server, sort)
+            MediaViewMode.FOLDER_TREE ->
+                videosByParent.keys
+                    .mapNotNull { parentPath ->
+                        immediateChildPath(currentPath = normalizedPath, candidatePath = parentPath)
+                    }
+                    .distinct()
+                    .map { folderPath ->
+                        val imagesInFolder = videosByParent.entries
+                            .filter { (parentPath, _) ->
+                                parentPath == folderPath || parentPath.startsWith("$folderPath/")
+                            }
+                            .flatMap { it.value }
+                            .orderedCloudVideos(server, sort)
+                        Folder(
+                            name = folderPath.substringAfterLast('/'),
+                            path = folderPath,
+                            dateModified = imagesInFolder.maxOfOrNull { it.dateModified } ?: 0L,
+                            coverMedia = imagesInFolder.firstOrNull(),
+                            mediaCount = imagesInFolder.size,
+                            cachedMediaSize = imagesInFolder.sumOf { it.size },
+                            folderList = buildImageHostingChildFoldersFromVideos(
+                                server = server,
+                                videosByParent = videosByParent,
+                                currentPath = folderPath,
+                                sort = sort,
+                            ),
+                        )
+                    }
+                    .orderedCloudFolders(server, sort)
+            MediaViewMode.IMAGE,
+            MediaViewMode.VIDEOS,
+            -> emptyList()
+        }
+        val imagesInCurrent = videosByParent[normalizedPath].orEmpty().orderedCloudVideos(server, sort)
+        val (displayFolders, displayImages) = when (viewMode) {
+            MediaViewMode.FOLDERS -> if (normalizedPath == ROOT_PATH) {
+                folderChildren to imagesInCurrent
+            } else {
+                emptyList<Folder>() to imagesInCurrent
+            }
+            MediaViewMode.FOLDER_TREE -> folderChildren to imagesInCurrent
+            MediaViewMode.IMAGE,
+            MediaViewMode.VIDEOS,
+            -> emptyList<Folder>() to images.orderedCloudVideos(server, sort)
+        }
+
+        return Folder(
+            name = cloudFolderDisplayName(server, normalizedPath),
+            path = normalizedPath,
+            dateModified = images.maxOfOrNull { it.dateModified } ?: System.currentTimeMillis(),
+            folderList = displayFolders,
+            mediaList = displayImages,
+            mediaCount = displayImages.size,
+            folderCount = displayFolders.size,
+            cachedMediaSize = displayImages.sumOf { it.size },
+        )
+    }
+
+    private fun buildImageHostingChildFoldersFromVideos(
+        server: WebDavServer,
+        videosByParent: Map<String, List<Video>>,
+        currentPath: String,
+        sort: Sort,
+    ): List<Folder> = videosByParent.keys
+        .mapNotNull { parentPath ->
+            immediateChildPath(currentPath = currentPath, candidatePath = parentPath)
+        }
+        .distinct()
+        .map { folderPath ->
+            val imagesInFolder = videosByParent.entries
+                .filter { (parentPath, _) ->
+                    parentPath == folderPath || parentPath.startsWith("$folderPath/")
+                }
+                .flatMap { it.value }
+                .orderedCloudVideos(server, sort)
+            Folder(
+                name = folderPath.substringAfterLast('/'),
+                path = folderPath,
+                dateModified = imagesInFolder.maxOfOrNull { it.dateModified } ?: 0L,
+                coverMedia = imagesInFolder.firstOrNull(),
+                mediaCount = imagesInFolder.size,
+                cachedMediaSize = imagesInFolder.sumOf { it.size },
             )
         }
-    }
+        .orderedCloudFolders(server, sort)
 
     private suspend fun saveImageHostingImageItemsSnapshot(
         serverId: Int,
@@ -971,7 +1124,7 @@ class ImageBrowserViewModel @Inject constructor(
         items: List<WebDavMediaItem>,
         append: Boolean,
     ) {
-        if (items.isEmpty()) return
+        if (append && items.isEmpty()) return
         val snapshotPath = imageHostingImageSnapshotPath(path)
         val mergedItems = if (append) {
             val existing = cloudDirectoryItemCache.get(serverId, snapshotPath)
@@ -1008,93 +1161,12 @@ class ImageBrowserViewModel @Inject constructor(
         }
     }
 
-    private fun preloadCloudPagesAhead(
-        server: WebDavServer,
-        path: String,
-        currentFolder: Folder,
-        currentPage: Int,
-        perPage: Int,
-        totalItems: Int,
-        preferences: ApplicationPreferences,
-        requestToken: Long,
-    ) {
-        val pagesToPreload = preferences.imageBrowserPreloadPageCount.coerceIn(
-            ApplicationPreferences.MIN_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
-            ApplicationPreferences.MAX_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
-        )
-        if (pagesToPreload <= 0 || currentPage * perPage >= totalItems) return
-
-        Logger.d(
-            TAG,
-            "cloudPreload start currentPage=$currentPage pages=$pagesToPreload perPage=$perPage total=$totalItems media=${currentFolder.mediaList.size}",
-        )
-        viewModelScope.launch(Dispatchers.IO) {
-            var page = currentPage
-            var folder = currentFolder
-            val apiPath = server.toApiPath(path)
-            repeat(pagesToPreload) {
-                if (requestToken != cloudLoadRequestToken || page * perPage >= totalItems) return@launch
-                val nextPage = page + 1
-                val data = openListApi.listDirectory(server, apiPath, page = nextPage, perPage = perPage)
-                    .getOrNull()
-                    ?: return@launch
-                if (requestToken != cloudLoadRequestToken) return@launch
-
-                val newItems = data.content.orEmpty().map { it.toWebDavMediaItem(server, apiPath) }
-                val newFolder = mapCloudFolder(server = server, path = apiPath, preferences = preferences, items = newItems)
-                Logger.d(TAG, "cloudPreload pageFetched page=$nextPage media=${newFolder.mediaList.size} folders=${newFolder.folderList.size}")
-                preloadCloudPageAssets(newFolder, preferences)
-                folder = appendCloudPageFolder(server.id, folder, newFolder)
-                page = nextPage
-
-                withContext(Dispatchers.Main) {
-                    if (requestToken != cloudLoadRequestToken) return@withContext
-                    uiStateInternal.update { state ->
-                        val currentContent = state.cloudGalleryState as? ImageGalleryUiState.Content
-                        if (
-                            currentContent != null &&
-                            state.selectedCloudServerId == server.id &&
-                            normalizePath(state.cloudPath) == normalizePath(path) &&
-                            state.cloudPage < page
-                        ) {
-                            state.copy(
-                                cloudGalleryState = ImageGalleryUiState.Content(folder),
-                                cloudPage = page,
-                                cloudHasMore = page * perPage < data.total,
-                                cloudTotalItems = data.total,
-                                cloudError = null,
-                            )
-                        } else {
-                            state
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private suspend fun preloadCloudPageAssets(
-        folder: Folder,
-        preferences: ApplicationPreferences,
-    ) = coroutineScope {
-        Logger.d(TAG, "cloudPreload assets start media=${folder.mediaList.size} folders=${folder.folderList.size}")
-        val thumbnailWarmJob = async {
-            warmCloudThumbnailCache(folder.mediaList, preferences)
-        }
-        val dimensionTargets = collectMissingDimensionTargets(folder)
-        val dimensionProbeJob = if (dimensionTargets.isNotEmpty()) {
-            async {
-                probeMissingCloudDimensions(dimensionTargets)
-            }
-        } else {
-            null
-        }
-        thumbnailWarmJob.await()
-        dimensionProbeJob?.await()
-        Logger.d(TAG, "cloudPreload assets done media=${folder.mediaList.size} dimensions=${dimensionTargets.size}")
-    }
-
-    private suspend fun appendCloudPageFolder(serverId: Int, current: Folder, next: Folder): Folder {
+    private suspend fun appendCloudPageFolder(
+        serverId: Int,
+        current: Folder,
+        next: Folder,
+        sort: Sort,
+    ): Folder {
         val existingFolderPaths = current.folderList.map { it.path }.toHashSet()
         val existingMediaUris = current.mediaList.map { it.uriString }.toHashSet()
         return enrichFolderWithDbMetadata(
@@ -1102,7 +1174,7 @@ class ImageBrowserViewModel @Inject constructor(
             current.copy(
                 folderList = current.folderList + next.folderList.filter { existingFolderPaths.add(it.path) },
                 mediaList = current.mediaList + next.mediaList.filter { existingMediaUris.add(it.uriString) },
-            ),
+            ).sortedLocally(sort),
         )
     }
 
@@ -1294,6 +1366,7 @@ class ImageBrowserViewModel @Inject constructor(
         folder: Folder,
         preferences: ApplicationPreferences,
         requestToken: Long,
+        refreshPreviewItems: Boolean = false,
     ) {
         if (folder.folderList.isEmpty()) return
 
@@ -1316,10 +1389,19 @@ class ImageBrowserViewModel @Inject constructor(
                     semaphore.withPermit {
                         val childPath = decodeCloudFolderPath(child.path)?.second ?: normalizePath(child.path)
                         if (effectiveImageViewMode(preferences.imageViewMode) == MediaViewMode.FOLDER_TREE) {
-                            val enriched = enrichCloudTreeFolderItem(server, child.copy(path = childPath), sort)
+                            val enriched = enrichCloudTreeFolderItem(
+                                server = server,
+                                child = child.copy(path = childPath),
+                                sort = sort,
+                                refreshPreviewItems = refreshPreviewItems,
+                            )
                             return@withPermit child.path to enriched.copy(path = child.path)
                         }
-                        val items = loadCloudPreviewItems(server, childPath)
+                        val items = loadCloudPreviewItems(
+                            server = server,
+                            path = childPath,
+                            refreshPreviewItems = refreshPreviewItems,
+                        )
                             ?: return@withPermit child.path to child
                         val images = items.filter { it.isImage }
                             .map { item -> mapCloudImageItemToVideo(server, childPath, item) }
@@ -1539,9 +1621,10 @@ class ImageBrowserViewModel @Inject constructor(
         server: WebDavServer,
         folderPath: String,
         sort: Sort,
+        refreshPreviewItems: Boolean = false,
     ): Pair<Video?, Int> {
         val normalizedPath = normalizePath(folderPath)
-        val cachedItems = webDavDirectoryCache.get(server.id, normalizedPath)
+        val cachedItems = if (refreshPreviewItems) null else webDavDirectoryCache.get(server.id, normalizedPath)
         if (cachedItems != null) {
             val media = cachedItems
                 .filter { it.isImage }
@@ -1555,7 +1638,7 @@ class ImageBrowserViewModel @Inject constructor(
                 .orderedCloudVideos(server, sort)
             return media.firstOrNull() to media.size
         }
-        val diskItems = getCachedCloudDirectoryItems(server.id, normalizedPath)
+        val diskItems = if (refreshPreviewItems) null else getCachedCloudDirectoryItems(server.id, normalizedPath)
         if (diskItems != null) {
             val media = diskItems
                 .filter { it.isImage }
@@ -1932,37 +2015,43 @@ class ImageBrowserViewModel @Inject constructor(
         } else {
             webDavRepository.getStreamUrl(item, server).stripUserInfoFromHttpUrl()
         }
+        val imageVersion = if (server.isImageHosting) item.lastModified?.time else null
+        val versionedImageUrl = imageUrl.withImageBrowserVersion(imageVersion)
         val thumbnailUrl = item.apiThumbnailUrl
             ?.stripUserInfoFromHttpUrl()
-            ?.takeIf { it.isNotBlank() && it != imageUrl }
-        val dimensionUrl = thumbnailUrl ?: imageUrl
-        val decodedUriPath = Uri.decode(imageUrl.toUri().path.orEmpty())
+            ?.withImageBrowserVersion(imageVersion)
+            ?.takeIf { it.isNotBlank() && it != versionedImageUrl }
+        val dimensionUrl = thumbnailUrl ?: versionedImageUrl
+        val decodedUriPath = Uri.decode(versionedImageUrl.toUri().path.orEmpty())
         val decodedPath = if (server.isImageHosting) {
-            decodedUriPath.removePrefix("/file").ifBlank { decodedUriPath }
+            decodedUriPath
+                .removePrefix("/file")
+                .removePrefix("/d")
+                .ifBlank { decodedUriPath }
         } else {
             decodedUriPath
         }
         val displayName = Uri.decode(item.name).ifBlank { decodedPath.substringAfterLast('/') }
-        val cached = resolveDimensionsFromCache(server.id, imageUrl)
+        val cached = resolveDimensionsFromCache(server.id, versionedImageUrl)
             ?: resolveDimensionsFromCache(server.id, dimensionUrl)
         val resolvedWidth = item.width?.takeIf { it > 0 } ?: cached?.first ?: 0
         val resolvedHeight = item.height?.takeIf { it > 0 } ?: cached?.second ?: 0
         val apiWidth = item.width ?: 0
         val apiHeight = item.height ?: 0
         if (apiWidth > 0 && apiHeight > 0) {
-            imageDimensionCache.put(server.id, imageUrl, apiWidth, apiHeight)
-            imageDimensionCache.put(server.id, stableUrlForDimensionCache(imageUrl), apiWidth, apiHeight)
-            if (dimensionUrl != imageUrl) {
+            imageDimensionCache.put(server.id, versionedImageUrl, apiWidth, apiHeight)
+            imageDimensionCache.put(server.id, stableUrlForDimensionCache(versionedImageUrl), apiWidth, apiHeight)
+            if (dimensionUrl != versionedImageUrl) {
                 imageDimensionCache.put(server.id, dimensionUrl, apiWidth, apiHeight)
                 imageDimensionCache.put(server.id, stableUrlForDimensionCache(dimensionUrl), apiWidth, apiHeight)
             }
         }
         return Video(
-            id = imageUrl.hashCode().toLong(),
+            id = versionedImageUrl.hashCode().toLong(),
             path = decodedPath.ifBlank { path },
             parentPath = decodedPath.substringBeforeLast('/', ""),
             duration = 1L,
-            uriString = imageUrl,
+            uriString = versionedImageUrl,
             nameWithExtension = displayName,
             width = resolvedWidth,
             height = resolvedHeight,
@@ -2000,10 +2089,15 @@ class ImageBrowserViewModel @Inject constructor(
     private suspend fun saveCurrentImageFolderMetadataToDb(server: WebDavServer, folder: Folder) {
         val folderPath = normalizePath(folder.path)
         val existing = cloudVideoMetadataRepository.getFolderMetadata(server.id, listOf(folderPath))[folderPath]
+        val existingCoverUri = existing?.coverImageUri
+            ?.toImageBrowserOriginalUri()
+            ?.takeUnless { server.isImageHosting }
         val coverUriToSave = folder.coverMedia?.uriString
             ?.takeIf(::isRemoteImageData)
+            ?.toImageBrowserOriginalUri()
             ?: folder.mediaList.firstOrNull { isRemoteImageData(it.uriString) }?.uriString
-            ?: existing?.coverImageUri
+                ?.toImageBrowserOriginalUri()
+            ?: existingCoverUri
 
         if (coverUriToSave != null &&
             isRemoteImageData(coverUriToSave) &&
@@ -2015,20 +2109,27 @@ class ImageBrowserViewModel @Inject constructor(
         val imageCount = when {
             folder.mediaCount > 0 -> folder.mediaCount
             folder.mediaList.isNotEmpty() -> folder.mediaList.size
+            server.isImageHosting -> 0
             else -> existing?.imageCount ?: 0
         }
         val folderCount = when {
             folder.folderCount > 0 -> folder.folderCount
             folder.folderList.isNotEmpty() -> folder.folderList.size
+            server.isImageHosting -> 0
             else -> existing?.folderCount ?: 0
         }
         val cachedMediaSize = folder.cachedMediaSize ?: 0L
         val totalSize = when {
             cachedMediaSize > 0 -> cachedMediaSize
             folder.mediaList.isNotEmpty() -> folder.mediaList.sumOf { it.size }
+            server.isImageHosting -> 0L
             else -> existing?.totalSize ?: 0L
         }
-        val mediaCount = maxOf(existing?.mediaCount ?: 0, imageCount)
+        val mediaCount = if (server.isImageHosting) {
+            imageCount
+        } else {
+            maxOf(existing?.mediaCount ?: 0, imageCount)
+        }
         val totalDurationMs = existing?.totalDurationMs ?: 0L
         val videoCount = existing?.videoCount ?: 0
         val metadataChanged = existing == null ||
@@ -2062,7 +2163,8 @@ class ImageBrowserViewModel @Inject constructor(
         )
         folder.folderList.forEach { child ->
             val newCoverUri = child.coverMedia?.uriString
-            val existingDbUri = existingMetadata[child.path]?.coverImageUri
+                ?.toImageBrowserOriginalUri()
+            val existingDbUri = existingMetadata[child.path]?.coverImageUri?.toImageBrowserOriginalUri()
             val coverUriToSave = if (newCoverUri != null && isRemoteImageData(newCoverUri)) {
                 newCoverUri
             } else {
@@ -2226,7 +2328,11 @@ class ImageBrowserViewModel @Inject constructor(
         return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
     }
 
-    private suspend fun enrichFolderWithDbMetadata(serverId: Int, folder: Folder): Folder {
+    private suspend fun enrichFolderWithDbMetadata(
+        serverId: Int,
+        folder: Folder,
+        replaceExistingCover: Boolean = true,
+    ): Folder {
         if (folder.folderList.isEmpty()) return folder
         val paths = folder.folderList.map { it.path }
         val metadataMap = cloudVideoMetadataRepository.getFolderMetadata(serverId, paths)
@@ -2247,21 +2353,38 @@ class ImageBrowserViewModel @Inject constructor(
                 val cachedDims = resolveDimensionsFromCache(serverId, dbCoverUri)
                     ?: localCoverUri?.let { resolveDimensionsFromCache(serverId, it) }
                     ?: localFile?.let(::readImageBounds)
-
-                result = result.copy(
-                    coverMedia = Video(
-                        id = dbCoverUri.hashCode().toLong(),
-                        path = child.path,
-                        duration = 1L,
-                        uriString = dbCoverUri,
-                        nameWithExtension = "",
-                        width = cachedDims?.first ?: 0,
-                        height = cachedDims?.second ?: 0,
-                        size = 0,
-                        dateModified = 0L,
-                        thumbnailUriString = localCoverUri,
-                    ),
-                )
+                val currentCover = result.coverMedia
+                result = if (currentCover == null || replaceExistingCover) {
+                    result.copy(
+                        coverMedia = Video(
+                            id = dbCoverUri.hashCode().toLong(),
+                            path = child.path,
+                            duration = 1L,
+                            uriString = dbCoverUri,
+                            nameWithExtension = "",
+                            width = cachedDims?.first ?: 0,
+                            height = cachedDims?.second ?: 0,
+                            size = 0,
+                            dateModified = 0L,
+                            thumbnailUriString = localCoverUri,
+                        ),
+                    )
+                } else if (
+                    localCoverUri != null &&
+                    stableCacheKey(
+                        currentCover.uriString.toImageBrowserOriginalUri(),
+                    ) == stableCacheKey(dbCoverUri)
+                ) {
+                    result.copy(
+                        coverMedia = currentCover.copy(
+                            thumbnailUriString = localCoverUri,
+                            width = currentCover.width.takeIf { it > 0 } ?: cachedDims?.first ?: 0,
+                            height = currentCover.height.takeIf { it > 0 } ?: cachedDims?.second ?: 0,
+                        ),
+                    )
+                } else {
+                    result
+                }
             }
             result
         }
@@ -2277,6 +2400,7 @@ class ImageBrowserViewModel @Inject constructor(
         server: WebDavServer,
         folder: Folder,
         preferences: ApplicationPreferences,
+        refreshPreviewItems: Boolean = false,
     ): Folder {
         val viewMode = effectiveImageViewMode(preferences.imageViewMode)
         if (viewMode == MediaViewMode.IMAGE) return folder
@@ -2284,11 +2408,22 @@ class ImageBrowserViewModel @Inject constructor(
 
         val sort = imageSort(preferences)
         if (viewMode == MediaViewMode.FOLDER_TREE) {
-            return enrichCloudTreeFolders(server, folder, sort)
+            return enrichCloudTreeFolders(
+                server = server,
+                folder = folder,
+                sort = sort,
+                refreshPreviewItems = refreshPreviewItems,
+            )
         }
 
         val resolvedFolders = folder.folderList.flatMap { child ->
-            resolveLeafFolderItem(server, child, sort, MAX_CLOUD_LEAF_DEPTH)
+            resolveLeafFolderItem(
+                server = server,
+                child = child,
+                sort = sort,
+                remainingDepth = MAX_CLOUD_LEAF_DEPTH,
+                refreshPreviewItems = refreshPreviewItems,
+            )
         }
         return folder.copy(
             folderList = deduplicateFolderNames(resolvedFolders.orderedCloudFolders(server, sort)),
@@ -2299,9 +2434,15 @@ class ImageBrowserViewModel @Inject constructor(
         server: WebDavServer,
         folder: Folder,
         sort: Sort,
+        refreshPreviewItems: Boolean = false,
     ): Folder {
         val enrichedFolders = folder.folderList.mapNotNull { child ->
-            enrichCloudTreeFolderItem(server, child, sort)
+            enrichCloudTreeFolderItem(
+                server = server,
+                child = child,
+                sort = sort,
+                refreshPreviewItems = refreshPreviewItems,
+            )
                 .takeIf(::hasDisplayableCloudImageFolder)
         }
         return folder.copy(folderList = deduplicateFolderNames(enrichedFolders.orderedCloudFolders(server, sort)))
@@ -2311,9 +2452,14 @@ class ImageBrowserViewModel @Inject constructor(
         server: WebDavServer,
         child: Folder,
         sort: Sort,
+        refreshPreviewItems: Boolean = false,
     ): Folder {
         val path = normalizePath(child.path)
-        val items = loadCloudPreviewItems(server, path) ?: return child
+        val items = loadCloudPreviewItems(
+            server = server,
+            path = path,
+            refreshPreviewItems = refreshPreviewItems,
+        ) ?: return child
         val images = items.filter { it.isImage }
             .map { item -> mapCloudImageItemToVideo(server, path, item) }
             .orderedCloudVideos(server, sort)
@@ -2325,6 +2471,7 @@ class ImageBrowserViewModel @Inject constructor(
                 server = server,
                 folderPath = folderPath,
                 sort = sort,
+                refreshPreviewItems = refreshPreviewItems,
             )
             val previewFolder = Folder(
                 name = displayName,
@@ -2367,12 +2514,21 @@ class ImageBrowserViewModel @Inject constructor(
     private suspend fun loadCloudPreviewItems(
         server: WebDavServer,
         path: String,
+        refreshPreviewItems: Boolean = false,
     ): List<com.sakurafubuki.yume.core.model.WebDavMediaItem>? {
         val normalizedPath = normalizePath(path)
-        getCachedCloudDirectoryItems(server.id, normalizedPath)?.let { return it }
+        if (!refreshPreviewItems) {
+            getCachedCloudDirectoryItems(server.id, normalizedPath)?.let { return it }
+        }
         val apiPath = server.toApiPath(normalizedPath)
         val data = cloudPreviewSemaphore.withPermit {
-            openListApi.listDirectory(server, apiPath, page = 1, perPage = 200).getOrNull()
+            openListApi.listDirectory(
+                server = server,
+                path = apiPath,
+                page = 1,
+                perPage = 200,
+                refresh = refreshPreviewItems,
+            ).getOrNull()
         } ?: return null
         return data.content.orEmpty().map { it.toWebDavMediaItem(server, apiPath) }
             .also {
@@ -2386,12 +2542,29 @@ class ImageBrowserViewModel @Inject constructor(
         folderPath: String,
         sort: Sort,
         remainingDepth: Int = MAX_CLOUD_LEAF_DEPTH,
+        refreshPreviewItems: Boolean = false,
     ): Pair<Video?, Int> {
-        if (remainingDepth <= 0) return buildCloudFolderPreview(server, folderPath, sort)
-        val cachedPreview = buildCloudFolderPreview(server, folderPath, sort)
+        if (remainingDepth <= 0) {
+            return buildCloudFolderPreview(
+                server = server,
+                folderPath = folderPath,
+                sort = sort,
+                refreshPreviewItems = refreshPreviewItems,
+            )
+        }
+        val cachedPreview = buildCloudFolderPreview(
+            server = server,
+            folderPath = folderPath,
+            sort = sort,
+            refreshPreviewItems = refreshPreviewItems,
+        )
         if (cachedPreview.first != null || cachedPreview.second > 0) return cachedPreview
 
-        val items = loadCloudPreviewItems(server, folderPath) ?: return cachedPreview
+        val items = loadCloudPreviewItems(
+            server = server,
+            path = folderPath,
+            refreshPreviewItems = refreshPreviewItems,
+        ) ?: return cachedPreview
         val images = items.filter { it.isImage }
             .map { item -> mapCloudImageItemToVideo(server, folderPath, item) }
             .orderedCloudVideos(server, sort)
@@ -2400,7 +2573,13 @@ class ImageBrowserViewModel @Inject constructor(
         val childPreviews = items.filter { it.isDirectory }
             .map { item ->
                 val childPath = normalizePath(resolveRelativePath(server, item.href))
-                resolveCloudFolderPreview(server, childPath, sort, remainingDepth - 1)
+                resolveCloudFolderPreview(
+                    server = server,
+                    folderPath = childPath,
+                    sort = sort,
+                    remainingDepth = remainingDepth - 1,
+                    refreshPreviewItems = refreshPreviewItems,
+                )
             }
             .filter { it.first != null || it.second > 0 }
         return childPreviews.firstNotNullOfOrNull { it.first } to childPreviews.sumOf { it.second }
@@ -2411,15 +2590,22 @@ class ImageBrowserViewModel @Inject constructor(
         child: Folder,
         sort: Sort,
         remainingDepth: Int,
+        refreshPreviewItems: Boolean = false,
     ): List<Folder> {
         if (remainingDepth <= 0) return listOf(child)
         val path = normalizePath(child.path)
 
-        var cachedItems = getCachedCloudDirectoryItems(server.id, path)
+        var cachedItems = if (refreshPreviewItems) null else getCachedCloudDirectoryItems(server.id, path)
 
         if (cachedItems == null) {
             val apiPath = server.toApiPath(path)
-            val apiResult = openListApi.listDirectory(server, apiPath, page = 1, perPage = 200).getOrNull()
+            val apiResult = openListApi.listDirectory(
+                server = server,
+                path = apiPath,
+                page = 1,
+                perPage = 200,
+                refresh = refreshPreviewItems,
+            ).getOrNull()
             cachedItems = apiResult?.content?.map { it.toWebDavMediaItem(server, apiPath) }
                 ?.also {
                     webDavDirectoryCache.put(server.id, path, it)
@@ -2458,6 +2644,7 @@ class ImageBrowserViewModel @Inject constructor(
                 ),
                 sort = sort,
                 remainingDepth = remainingDepth - 1,
+                refreshPreviewItems = refreshPreviewItems,
             ).map { it.copy(name = "${child.name}/${it.name}") }
         }
     }
@@ -2476,6 +2663,11 @@ class ImageBrowserViewModel @Inject constructor(
         server: WebDavServer,
         sort: Sort,
     ): List<Folder> = sortedWith(sort.folderComparator())
+
+    private fun Folder.sortedLocally(sort: Sort): Folder = copy(
+        folderList = folderList.sortedWith(sort.folderComparator()),
+        mediaList = mediaList.sortedWith(sort.videoComparator()),
+    )
 
     private fun mapLocalImageToVideo(image: LocalImage): Video {
         val parentPath = normalizePath(image.relativePath)
@@ -2587,6 +2779,12 @@ class ImageBrowserViewModel @Inject constructor(
             .substringBefore('/')
             .ifBlank { return null }
         return normalizePath("$normalizedCurrentPath/$nextSegment")
+    }
+
+    private fun isDescendantPath(path: String, parentPath: String): Boolean {
+        val normalizedPath = normalizePath(path)
+        val normalizedParent = normalizePath(parentPath)
+        return normalizedParent == ROOT_PATH || normalizedPath.startsWith("$normalizedParent/")
     }
 
     private fun normalizePath(path: String): String {
@@ -2826,7 +3024,7 @@ class ImageBrowserViewModel @Inject constructor(
         }
         val targets = images
             .asSequence()
-            .map { it.thumbnailUriString?.takeIf(String::isNotBlank) ?: it.uriString }
+            .map { it.imageBrowserDisplayUri(preferences.imageBrowserThumbnailSizePx) }
             .filter { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
             .distinct()
             .take(warmLimit)
@@ -3013,7 +3211,8 @@ private const val IMAGE_HOSTING_FOLDER_COVER_PREFETCH_LIMIT = 24
 private const val CLOUD_THUMBNAIL_WARM_CONCURRENCY = 4
 private const val CLOUD_THUMBNAIL_WARM_DISK_MAX_PER_PAGE = 50
 private const val CLOUD_THUMBNAIL_WARM_MEMORY_MAX_PER_PAGE = 24
-private const val IMAGE_HOSTING_INDEX_ALL_COUNT = -1
+private const val IMAGE_HOSTING_SEARCH_PAGE_SIZE = 200
+private const val IMAGE_HOSTING_SEARCH_MAX_RESULTS = 50_000
 private const val IMAGE_HOSTING_IMAGE_SNAPSHOT_PREFIX = "__image_hosting_images__:"
 private const val FOLDER_COVER_DOWNLOAD_TIMEOUT_MS = 15_000
 private const val FOLDER_COVER_FALLBACK_EXTENSION = "webp"
@@ -3088,8 +3287,14 @@ private fun FsSearchItem.toSyntheticImageWebDavMediaItem(
     } else {
         "$encodedDirSegments/$encodedName"
     }
+    val imageHostingRawUrl = raw_url.toAbsoluteUrl(rootBaseUrl)
+        ?: "$rootBaseUrl/file/$filePath"
+    val imageHostingThumbnailUrl = thumb_512.toAbsoluteUrl(rootBaseUrl)
+        ?: thumb_1024.toAbsoluteUrl(rootBaseUrl)
+        ?: thumb.toAbsoluteUrl(rootBaseUrl)
+        ?: "$rootBaseUrl/thumb/512/$filePath"
     val href = if (server.isImageHosting) {
-        "$rootBaseUrl/file/$filePath"
+        imageHostingRawUrl
     } else if (encodedDirSegments.isBlank()) {
         "$rootBaseUrl/d/$encodedName"
     } else {
@@ -3102,14 +3307,15 @@ private fun FsSearchItem.toSyntheticImageWebDavMediaItem(
         size = size,
         width = width.takeIf { it > 0 },
         height = height.takeIf { it > 0 },
-        lastModified = parseCloudFlareImgBedTimestamp(modified),
+        lastModified = parseImageHostingTimestamp(modified),
         isDirectory = false,
         serverId = server.id,
+        apiThumbnailUrl = imageHostingThumbnailUrl,
         rawVideoUrl = href,
     )
 }
 
-private fun parseCloudFlareImgBedTimestamp(value: String): Date? {
+private fun parseImageHostingTimestamp(value: String): Date? {
     if (value.isBlank()) return null
     value.toLongOrNull()?.let { timestamp ->
         val millis = if (timestamp < 10_000_000_000L) timestamp * 1000L else timestamp

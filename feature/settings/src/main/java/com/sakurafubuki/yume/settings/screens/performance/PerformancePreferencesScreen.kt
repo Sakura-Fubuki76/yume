@@ -98,7 +98,6 @@ private fun PerformancePreferencesContent(
                 .padding(horizontal = 16.dp),
         ) {
             val imageCacheSizeTitle = stringResource(R.string.image_cache_size)
-            val imageBrowserMemoryCacheSizeTitle = stringResource(R.string.image_browser_memory_cache_size)
             val imageBrowserThumbnailSizeTitle = stringResource(R.string.image_browser_thumbnail_size)
             val imageBrowserPreloadPageCountTitle = stringResource(R.string.image_browser_preload_page_count)
             val streamingMinBufferTitle = stringResource(R.string.streaming_min_buffer)
@@ -109,48 +108,11 @@ private fun PerformancePreferencesContent(
                 uiState.currentImageCacheUsageMb * 10 >= uiState.imageCacheSizeMb * 9L
             ListSectionTitle(text = stringResource(id = R.string.image_browsing_experience))
             Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                PreferenceSlider(
-                    title = imageBrowserMemoryCacheSizeTitle,
-                    description = stringResource(R.string.cache_size_ram_percent, uiState.imageBrowserMemoryCachePercent),
-                    icon = NextIcons.Speed,
-                    value = uiState.imageBrowserMemoryCachePercent.toFloat(),
-                    valueRange = ApplicationPreferences.MIN_IMAGE_BROWSER_MEMORY_CACHE_PERCENT.toFloat()..ApplicationPreferences.MAX_IMAGE_BROWSER_MEMORY_CACHE_PERCENT.toFloat(),
-                    steps = discreteSliderSteps(
-                        minValue = ApplicationPreferences.MIN_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                        maxValue = ApplicationPreferences.MAX_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                        stepSize = MEMORY_CACHE_STEP_PERCENT,
-                    ),
-                    onValueChange = {
-                        onEvent(
-                            MediaLibraryPreferencesUiEvent.UpdateImageBrowserMemoryCachePercent(
-                                snapSliderValue(
-                                    value = it,
-                                    minValue = ApplicationPreferences.MIN_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                                    maxValue = ApplicationPreferences.MAX_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                                    stepSize = MEMORY_CACHE_STEP_PERCENT,
-                                ),
-                            ),
-                        )
-                    },
-                    onClick = {
-                        pendingCustomValueInput = CustomValueInputDialogState(
-                            title = imageBrowserMemoryCacheSizeTitle,
-                            initialValue = uiState.imageBrowserMemoryCachePercent,
-                            minValue = ApplicationPreferences.MIN_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                            maxValue = ApplicationPreferences.MAX_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                            stepSize = MEMORY_CACHE_STEP_PERCENT,
-                            onConfirm = {
-                                onEvent(MediaLibraryPreferencesUiEvent.UpdateImageBrowserMemoryCachePercent(it))
-                            },
-                        )
-                    },
-                    isFirstItem = true,
-                    isLastItem = false,
-                )
                 ImageBrowserThumbnailSizePicker(
                     title = imageBrowserThumbnailSizeTitle,
                     currentSizePx = uiState.imageBrowserThumbnailSizePx,
                     onSizeSelected = { onEvent(MediaLibraryPreferencesUiEvent.UpdateImageBrowserThumbnailSizePx(it)) },
+                    isFirstItem = true,
                     isLastItem = false,
                 )
                 PreferenceSlider(
@@ -436,13 +398,15 @@ private fun ImageBrowserThumbnailSizePicker(
     title: String,
     currentSizePx: Int,
     onSizeSelected: (Int) -> Unit,
+    isFirstItem: Boolean,
     isLastItem: Boolean,
 ) {
     var showDialog by remember { mutableStateOf(false) }
-    val description = if (currentSizePx == ApplicationPreferences.IMAGE_BROWSER_THUMBNAIL_SIZE_ORIGINAL) {
+    val normalizedSizePx = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(currentSizePx)
+    val description = if (normalizedSizePx == ApplicationPreferences.IMAGE_BROWSER_THUMBNAIL_SIZE_ORIGINAL) {
         stringResource(R.string.image_browser_thumbnail_size_original)
     } else {
-        stringResource(R.string.image_browser_thumbnail_size_desc, currentSizePx)
+        stringResource(R.string.image_browser_thumbnail_size_desc, normalizedSizePx)
     }
 
     ClickablePreferenceItem(
@@ -450,7 +414,7 @@ private fun ImageBrowserThumbnailSizePicker(
         description = description,
         icon = NextIcons.Image,
         onClick = { showDialog = true },
-        isFirstItem = false,
+        isFirstItem = isFirstItem,
         isLastItem = isLastItem,
     )
 
@@ -480,7 +444,7 @@ private fun ImageBrowserThumbnailSizePicker(
                                 }
                                 .padding(vertical = 12.dp, horizontal = 4.dp),
                             style = MaterialTheme.typography.bodyLarge,
-                            color = if (sizePx == currentSizePx) {
+                            color = if (sizePx == normalizedSizePx) {
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.onSurface
@@ -636,7 +600,6 @@ private data class CustomValueInputDialogState(
     val onConfirm: (Int) -> Unit,
 )
 
-private const val MEMORY_CACHE_STEP_PERCENT = 5
 private const val PRELOAD_PAGE_STEP = 1
 private const val DISK_CACHE_STEP_MB = 1024
 private const val STREAMING_LARGE_BUFFER_STEP_MS = 5_000

@@ -61,8 +61,9 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
                         streamingMaxBufferMs = it.streamingMaxBufferMs,
                         streamingBufferForPlaybackMs = it.streamingBufferForPlaybackMs,
                         streamingBufferForPlaybackAfterRebufferMs = it.streamingBufferForPlaybackAfterRebufferMs,
-                        imageBrowserMemoryCachePercent = it.imageBrowserMemoryCachePercent,
-                        imageBrowserThumbnailSizePx = it.imageBrowserThumbnailSizePx,
+                        imageBrowserThumbnailSizePx = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(
+                            it.imageBrowserThumbnailSizePx,
+                        ),
                         imageBrowserPreloadPageCount = it.imageBrowserPreloadPageCount,
                     )
                 }
@@ -99,7 +100,6 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
             is MediaLibraryPreferencesUiEvent.UpdateStreamingMaxBufferMs -> setStreamingMaxBufferMs(event.value)
             is MediaLibraryPreferencesUiEvent.UpdateStreamingBufferForPlaybackMs -> setStreamingBufferForPlaybackMs(event.value)
             is MediaLibraryPreferencesUiEvent.UpdateStreamingBufferForPlaybackAfterRebufferMs -> setStreamingBufferForPlaybackAfterRebufferMs(event.value)
-            is MediaLibraryPreferencesUiEvent.UpdateImageBrowserMemoryCachePercent -> setImageBrowserMemoryCachePercent(event.percent)
             is MediaLibraryPreferencesUiEvent.UpdateImageBrowserThumbnailSizePx -> setImageBrowserThumbnailSizePx(event.sizePx)
             is MediaLibraryPreferencesUiEvent.UpdateImageBrowserPreloadPageCount -> setImageBrowserPreloadPageCount(event.count)
             is MediaLibraryPreferencesUiEvent.UpdateImageCacheExpiry -> setImageCacheExpiry(event.expiry)
@@ -237,29 +237,9 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
         }
     }
 
-    private fun setImageBrowserMemoryCachePercent(percent: Int) {
-        viewModelScope.launch {
-            val normalized = percent.coerceIn(
-                ApplicationPreferences.MIN_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-                ApplicationPreferences.MAX_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
-            )
-            preferencesRepository.updateApplicationPreferences {
-                it.copy(imageBrowserMemoryCachePercent = normalized)
-            }
-            val diskCacheSize = preferencesRepository.applicationPreferences.value.diskCacheSizeMb
-            withContext(ioDispatcher) {
-                ImageCacheManager.rebuildGlobalImageLoader(diskCacheSize)
-            }
-        }
-    }
-
     private fun setImageBrowserThumbnailSizePx(sizePx: Int) {
         viewModelScope.launch {
-            val normalized = if (sizePx in ApplicationPreferences.IMAGE_BROWSER_THUMBNAIL_SIZE_OPTIONS) {
-                sizePx
-            } else {
-                ApplicationPreferences.DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX
-            }
+            val normalized = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(sizePx)
             preferencesRepository.updateApplicationPreferences {
                 it.copy(imageBrowserThumbnailSizePx = normalized)
             }
@@ -309,7 +289,6 @@ data class MediaLibraryPreferencesUiState(
     val streamingBufferForPlaybackMs: Int = ApplicationPreferences.DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_MS,
     val streamingBufferForPlaybackAfterRebufferMs: Int = ApplicationPreferences.DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
     val currentImageCacheUsageMb: Long = 0,
-    val imageBrowserMemoryCachePercent: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
     val imageBrowserThumbnailSizePx: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX,
     val imageBrowserPreloadPageCount: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
     val lastConnectionTestResult: Boolean? = null,
@@ -327,7 +306,6 @@ sealed interface MediaLibraryPreferencesUiEvent {
     data class UpdateStreamingMaxBufferMs(val value: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateStreamingBufferForPlaybackMs(val value: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateStreamingBufferForPlaybackAfterRebufferMs(val value: Int) : MediaLibraryPreferencesUiEvent
-    data class UpdateImageBrowserMemoryCachePercent(val percent: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateImageBrowserThumbnailSizePx(val sizePx: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateImageBrowserPreloadPageCount(val count: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateImageCacheExpiry(val expiry: CacheExpiry) : MediaLibraryPreferencesUiEvent

@@ -402,7 +402,7 @@
     <string name="image_browser_thumbnail_size_desc">%1$d px</string>
     <string name="image_browser_disk_cache_size">磁盘缓存上限</string>
     <string name="image_browser_preload_page_count">预加载页数</string>
-    <string name="image_browser_preload_page_count_desc">浏览目录时提前预加载 %1$d 页</string>
+    <string name="image_browser_preload_page_count_desc">预加载 %1$d 页</string>
     <string name="streaming_buffer">流媒体缓冲</string>
     <string name="streaming_min_buffer">最小缓冲</string>
     <string name="streaming_max_buffer">最大缓冲</string>
@@ -429,7 +429,7 @@
     <string name="webdav_scheme">协议</string>
     <string name="webdav_port">端口</string>
     <string name="webdav_path">路径</string>
-    <string name="image_browser_thumbnail_size_original">原始尺寸</string>
+    <string name="image_browser_thumbnail_size_original">原图</string>
     <string name="loading_cloud_media">正在加载云端媒体…</string>
     <string name="load_failed">加载失败</string>
     <string name="time_separator"> / </string>

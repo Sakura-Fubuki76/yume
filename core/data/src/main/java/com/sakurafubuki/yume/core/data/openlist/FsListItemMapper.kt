@@ -10,6 +10,8 @@ import java.util.Date
 fun cleanThumbUrl(url: String): String = url
 
 fun WebDavServer.toApiPath(cloudPath: String): String {
+    if (isImageHosting) return normalizePath(cloudPath)
+
     val serverPath = Uri.decode(Uri.parse(url).path.orEmpty()).trimEnd('/')
 
     val davIndex = serverPath.indexOf("/dav")
@@ -55,15 +57,21 @@ fun FsListItem.toWebDavMediaItem(server: WebDavServer, dirPath: String): WebDavM
     } else {
         null
     }
+    val imageHostingThumbnailUrl = if (server.isImageHosting && !is_dir) {
+        val fullPath = if (encodedDirSegments.isBlank()) {
+            encodedName
+        } else {
+            "$encodedDirSegments/$encodedName"
+        }
+        "$rootBaseUrl/thumb/512/$fullPath"
+    } else {
+        null
+    }
     val rawVideoUrl: String? = if (!is_dir) {
         if (server.isImageHosting) {
-            if (thumb.isNotBlank() && (thumb.startsWith("http://") || thumb.startsWith("https://"))) {
-                thumb
-            } else if (thumb.isNotBlank()) {
-                "$rootBaseUrl/${thumb.trimStart('/').toEncodedPathPreservingSlashes()}"
-            } else {
-                imageHostingFileUrl ?: "$rootBaseUrl/$encodedDirSegments/$encodedName"
-            }
+            raw_url.toAbsoluteUrl(rootBaseUrl)
+                ?: imageHostingFileUrl
+                ?: "$rootBaseUrl/$encodedDirSegments/$encodedName"
         } else {
             val rawFullPath = if (dirPath == "/") "/d/$encodedName" else "/d/$encodedDirSegments/$encodedName"
             "$rootBaseUrl$rawFullPath$signParam"
@@ -81,6 +89,13 @@ fun FsListItem.toWebDavMediaItem(server: WebDavServer, dirPath: String): WebDavM
     } else {
         val resolvedHref = rawVideoUrl ?: rootBaseUrl
         val resolvedThumbnail = when {
+            server.isImageHosting -> {
+                val thumbnail = thumb_512.toAbsoluteUrl(rootBaseUrl)
+                    ?: thumb_1024.toAbsoluteUrl(rootBaseUrl)
+                    ?: thumb.toAbsoluteUrl(rootBaseUrl)
+                    ?: imageHostingThumbnailUrl
+                thumbnail?.let(::cleanThumbUrl)
+            }
             thumb.isNotBlank() && (thumb.startsWith("http://") || thumb.startsWith("https://")) -> {
                 cleanThumbUrl(thumb)
             }
@@ -122,6 +137,13 @@ private fun parseOpenListModifiedTime(value: String): Date? {
     } catch (_: DateTimeParseException) {
         null
     }
+}
+
+fun String.toAbsoluteUrl(rootBaseUrl: String): String? {
+    val value = trim()
+    if (value.isBlank()) return null
+    if (value.startsWith("http://") || value.startsWith("https://")) return value
+    return "$rootBaseUrl/${value.trimStart('/').toEncodedPathPreservingSlashes()}"
 }
 
 private fun normalizePath(path: String): String {

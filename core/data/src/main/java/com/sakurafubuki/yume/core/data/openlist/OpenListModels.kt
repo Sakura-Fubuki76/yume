@@ -1,7 +1,6 @@
 package com.sakurafubuki.yume.core.data.openlist
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class FsListRequest(
@@ -31,6 +30,9 @@ data class FsListItem(
     val size: Long = 0L,
     val is_dir: Boolean = false,
     val thumb: String = "",
+    val raw_url: String = "",
+    val thumb_512: String = "",
+    val thumb_1024: String = "",
     val width: Int = 0,
     val height: Int = 0,
     val modified: String = "",
@@ -66,30 +68,16 @@ data class FsSearchItem(
     val parent: String = "",
     val name: String = "",
     val fullPath: String = "",
+    val raw_url: String = "",
+    val thumb: String = "",
+    val thumb_512: String = "",
+    val thumb_1024: String = "",
     val modified: String = "",
     val is_dir: Boolean = false,
     val size: Long = 0L,
     val width: Int = 0,
     val height: Int = 0,
     val type: Int = 0,
-)
-
-@Serializable
-data class CloudFlareImgBedListResponse(
-    val files: List<CloudFlareImgBedFile> = emptyList(),
-    val directories: List<String> = emptyList(),
-    val totalCount: Int = 0,
-    val directFileCount: Int = 0,
-    val directFolderCount: Int = 0,
-    val returnedCount: Int = 0,
-    val indexLastUpdated: JsonElement? = null,
-    val isIndexedResponse: Boolean = true,
-)
-
-@Serializable
-data class CloudFlareImgBedFile(
-    val name: String = "",
-    val metadata: Map<String, JsonElement> = emptyMap(),
 )
 
 @Serializable

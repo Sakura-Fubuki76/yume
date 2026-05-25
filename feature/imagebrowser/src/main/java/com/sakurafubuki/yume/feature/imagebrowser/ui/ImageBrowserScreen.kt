@@ -152,7 +152,6 @@ private val LocalGridLockState = compositionLocalOf { mutableStateOf(false) }
 object ImageViewerStore {
     var images: List<Video> = emptyList()
     var previewQuality: ImageQuality = DEFAULT_IMAGE_QUALITY
-    var imageBrowserMemoryCachePercent: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_MEMORY_CACHE_PERCENT
     var imageBrowserThumbnailSizePx: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX
     var imageBrowserPreloadPageCount: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_PRELOAD_PAGE_COUNT
     var imageCloudDiskCacheEnabled: Boolean = true
@@ -382,7 +381,6 @@ private fun ImageBrowserScreen(
 
     LaunchedEffect(
         currentFolder,
-        uiState.preferences.imageBrowserMemoryCachePercent,
         uiState.preferences.imageBrowserThumbnailSizePx,
         uiState.preferences.imageBrowserPreloadPageCount,
         uiState.preferences.imageCloudDiskCacheEnabled,
@@ -390,8 +388,9 @@ private fun ImageBrowserScreen(
     ) {
         ImageViewerStore.images = currentFolder?.mediaList ?: emptyList()
         ImageViewerStore.previewQuality = uiState.preferences.imageQuality
-        ImageViewerStore.imageBrowserMemoryCachePercent = uiState.preferences.imageBrowserMemoryCachePercent
-        ImageViewerStore.imageBrowserThumbnailSizePx = uiState.preferences.imageBrowserThumbnailSizePx
+        ImageViewerStore.imageBrowserThumbnailSizePx = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(
+            uiState.preferences.imageBrowserThumbnailSizePx,
+        )
         ImageViewerStore.imageBrowserPreloadPageCount = uiState.preferences.imageBrowserPreloadPageCount
         ImageViewerStore.imageCloudDiskCacheEnabled = uiState.preferences.imageCloudDiskCacheEnabled
     }
@@ -1043,7 +1042,7 @@ private fun ImageMediaView(
             ApplicationPreferences.MIN_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
             ApplicationPreferences.MAX_IMAGE_BROWSER_PRELOAD_PAGE_COUNT,
         )
-        if (!isCloudMode || pagesToPreload <= 0 || mediaCount <= 0) return@LaunchedEffect
+        if (pagesToPreload <= 0 || mediaCount <= 0) return@LaunchedEffect
 
         snapshotFlow {
             val visibleMediaIndexes = gridState.layoutInfo.visibleItemsInfo
@@ -1685,7 +1684,7 @@ private fun parentPath(path: String): String {
     return normalized.substringBeforeLast('/', "/").ifBlank { "/" }
 }
 
-private fun Video.displayUriString(): String = thumbnailUriString?.takeIf { it.isNotBlank() } ?: uriString
+private fun Video.displayUriString(): String = imageBrowserDisplayUri(ImageViewerStore.imageBrowserThumbnailSizePx)
 
 private fun localNavigateUpTarget(path: String, imageViewMode: MediaViewMode): String = when (imageViewMode) {
     MediaViewMode.FOLDERS -> "/"
@@ -1701,7 +1700,7 @@ private suspend fun preloadGridScreenThumbnails(
 ) {
     val targets = images
         .asSequence()
-        .map { image -> image.displayUriString() }
+        .map { image -> image.imageBrowserDisplayUri(thumbnailMaxEdgePx) }
         .filter { uri -> uri.isNotBlank() && !GridImageLoadMemory.contains(uri) }
         .distinct()
         .toList()
@@ -1771,7 +1770,8 @@ private suspend fun preloadAdjacentViewerImages(
         currentPage = currentPage,
         pageCount = images.size,
         radius = radius,
-    ).mapNotNull { page -> images.getOrNull(page) }
+    )
+        .mapNotNull { page -> images.getOrNull(page) }
     if (targets.isEmpty()) return
 
     withContext(Dispatchers.IO) {

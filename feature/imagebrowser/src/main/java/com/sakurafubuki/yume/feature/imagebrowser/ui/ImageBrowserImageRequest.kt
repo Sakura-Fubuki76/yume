@@ -23,7 +23,9 @@ internal fun stableCacheKey(data: Any): String {
     val raw = data.toString()
     val stable = raw.substringBefore('?')
     return if (stable.startsWith("http://") || stable.startsWith("https://")) {
-        stable
+        raw.toUri().getQueryParameter("v")?.takeIf { it.isNotBlank() }?.let { version ->
+            "$stable?v=$version"
+        } ?: stable
     } else {
         raw
     }
@@ -40,16 +42,17 @@ internal fun buildImageRequest(
         ImageRequestProfile.THUMBNAIL -> "thumb"
         ImageRequestProfile.VIEWER -> "viewer"
     }
+    val normalizedThumbnailSizePx = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(thumbnailMaxEdgePx)
     val isRemote = isRemoteImageData(data)
     val cacheKey = if (isRemote) stableCacheKey(data) else data.toString()
     val useRemoteDiskCache = isRemote && ImageViewerStore.imageCloudDiskCacheEnabled
     return ImageRequest.Builder(context)
         .data(data)
         .crossfade(false)
-        .memoryCacheKey("$cacheKey|$quality|$cacheKeySuffix|$thumbnailMaxEdgePx")
+        .memoryCacheKey("$cacheKey|$quality|$cacheKeySuffix|$normalizedThumbnailSizePx")
         .apply {
             if (useRemoteDiskCache) {
-                diskCacheKey("$cacheKey|$quality|$cacheKeySuffix|$thumbnailMaxEdgePx")
+                diskCacheKey("$cacheKey|$quality|$cacheKeySuffix|$normalizedThumbnailSizePx")
             } else {
                 diskCachePolicy(CachePolicy.DISABLED)
                 memoryCachePolicy(CachePolicy.ENABLED)
@@ -58,7 +61,8 @@ internal fun buildImageRequest(
         .applyImageQuality(
             quality = quality,
             profile = profile,
-            thumbnailMaxEdgePx = thumbnailMaxEdgePx,
+            thumbnailMaxEdgePx = normalizedThumbnailSizePx,
+            isServerThumbnail = isRemote && data.isImageBrowserServerThumbnailUrl(),
         )
         .apply {
             if (profile != ImageRequestProfile.VIEWER || quality != ImageQuality.ORIGINAL) {
@@ -81,7 +85,8 @@ internal fun thumbnailMemoryCacheKey(
     thumbnailMaxEdgePx: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX,
 ): String {
     val cacheKey = if (isRemoteImageData(data)) stableCacheKey(data) else data.toString()
-    return "$cacheKey|$quality|thumb|$thumbnailMaxEdgePx"
+    val normalizedThumbnailSizePx = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(thumbnailMaxEdgePx)
+    return "$cacheKey|$quality|thumb|$normalizedThumbnailSizePx"
 }
 
 internal fun isRemoteImageData(data: Any): Boolean {
@@ -107,8 +112,14 @@ private fun ImageRequest.Builder.applyImageQuality(
     quality: ImageQuality,
     profile: ImageRequestProfile,
     thumbnailMaxEdgePx: Int,
+    isServerThumbnail: Boolean,
 ): ImageRequest.Builder {
     if (quality == ImageQuality.ORIGINAL && profile == ImageRequestProfile.VIEWER) {
+        size(Size.ORIGINAL)
+        precision(Precision.EXACT)
+        return this
+    }
+    if (isServerThumbnail && profile == ImageRequestProfile.THUMBNAIL) {
         size(Size.ORIGINAL)
         precision(Precision.EXACT)
         return this

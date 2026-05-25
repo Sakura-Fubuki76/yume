@@ -415,10 +415,10 @@
     <string name="cache_expiry_never">Never</string>
     <string name="image_browser_thumbnail_size">Thumbnail size</string>
     <string name="image_browser_thumbnail_size_desc">%1$d px</string>
-    <string name="image_browser_thumbnail_size_original">Original</string>
+    <string name="image_browser_thumbnail_size_original">Original image</string>
     <string name="image_browser_disk_cache_size">Disk cache limit</string>
     <string name="image_browser_preload_page_count">Preload pages</string>
-    <string name="image_browser_preload_page_count_desc">Eagerly prefetch %1$d page(s) ahead in gallery</string>
+    <string name="image_browser_preload_page_count_desc">Preload %1$d page(s) ahead</string>
     <string name="cache_size_mb">%1$d MB</string>
     <string name="clear_cache">Clear cache</string>
     <string name="clear_image_cache">Clear cloud image cache</string>

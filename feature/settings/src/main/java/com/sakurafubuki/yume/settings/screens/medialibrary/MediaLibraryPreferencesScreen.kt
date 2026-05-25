@@ -463,19 +463,12 @@ private fun WebDavServerList(
             )
         }
         ClickablePreferenceItem(
-            title = stringResource(R.string.add_image_hosting),
-            description = stringResource(R.string.add_image_hosting_desc),
-            icon = NextIcons.Image,
-            onClick = onAddImageHosting,
-            isFirstItem = servers.isEmpty(),
-            isLastItem = false,
-        )
-        ClickablePreferenceItem(
             title = stringResource(R.string.add_webdav_storage),
             description = stringResource(R.string.add_webdav_storage_desc),
             icon = NextIcons.Add,
             onClick = onAddServer,
-            isFirstItem = false,
+            onLongClick = onAddImageHosting,
+            isFirstItem = servers.isEmpty(),
             isLastItem = true,
         )
     }
