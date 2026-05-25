@@ -14,7 +14,11 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -43,9 +47,56 @@ object SpriteSheetGenerator {
 
     private const val MAX_CONCURRENT_DOWNLOADS = 8
 
+    private const val FRAME_CANDIDATE_RADIUS = 2
+
     private val decoderNameCache = ConcurrentHashMap<String, String>()
 
+    private var nativeSolidColorCheckAvailable = true
+
+    private val generationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val inFlightGenerations = ConcurrentHashMap<String, Deferred<SpriteSheetResult?>>()
+
     suspend fun generate(
+        source: String,
+        httpHeaders: Map<String, String>? = null,
+        durationMs: Long,
+        cacheDir: File,
+        cacheKey: String,
+        context: Context? = null,
+    ): SpriteSheetResult? {
+        val inFlightKey = "${cacheDir.absolutePath}|$cacheKey"
+        var created = false
+        val deferred = inFlightGenerations[inFlightKey] ?: synchronized(inFlightGenerations) {
+            inFlightGenerations[inFlightKey] ?: generationScope.async {
+                doGenerate(
+                    source = source,
+                    httpHeaders = httpHeaders,
+                    durationMs = durationMs,
+                    cacheDir = cacheDir,
+                    cacheKey = cacheKey,
+                    context = context?.applicationContext,
+                )
+            }.also {
+                inFlightGenerations[inFlightKey] = it
+                created = true
+            }
+        }
+
+        if (!created) {
+            Logger.d(TAG, "Join in-flight sprite sheet generation for $cacheKey")
+        }
+
+        return try {
+            deferred.await()
+        } finally {
+            if (deferred.isCompleted) {
+                inFlightGenerations.remove(inFlightKey, deferred)
+            }
+        }
+    }
+
+    private suspend fun doGenerate(
         source: String,
         httpHeaders: Map<String, String>? = null,
         durationMs: Long,
@@ -87,6 +138,7 @@ object SpriteSheetGenerator {
                 generateFromMediaExtractor(source, durationMs, spriteFile, metaFile, cacheDir, cacheKey, context)
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Logger.e(TAG, "Sprite sheet generation failed", e)
             null
         }
@@ -174,101 +226,89 @@ object SpriteSheetGenerator {
             Bitmap.Config.ARGB_8888,
         )
 
-        var framesDownloaded = 0
+        val targets = selectFrameTargets(allKeyframes, actualFrameCount, intervalMs)
+        val pendingGridIndices = targets.mapTo(LinkedHashSet<Int>()) { it.gridIndex }
+        var framesComposited = 0
         var bytesDownloaded = 0L
-
-        data class FrameTarget(val gridIndex: Int, val kf: Mp4KeyframeExtractor.KeyframeEntry)
-
-        val targets = (0 until actualFrameCount).mapNotNull { i ->
-            val targetTimeMs = (i * intervalMs).toLong()
-            val kf = allKeyframes.minByOrNull { kotlin.math.abs(it.timeMs - targetTimeMs) }
-            if (kf != null) FrameTarget(i, kf) else null
-        }
-        Logger.d(TAG, "Selected ${targets.size} targets out of ${allKeyframes.size} keyframes")
-        Logger.d("BUG4_SpriteSheet", "Selected ${targets.size} targets, reading keyframe data...")
-
+        var decodedFrames = 0
         val readStart = System.currentTimeMillis()
-        val pairedData: List<Pair<FrameTarget, ByteArray?>> = targets.chunked(MAX_CONCURRENT_DOWNLOADS).flatMap { batch ->
-            coroutineScope {
-                batch.map { target ->
-                    async {
-                        val data = if (isLocal) {
-                            mp4Extractor.readFileRange(source, target.kf.byteOffset, target.kf.byteSize)
-                        } else {
-                            mp4Extractor.httpRange(source, target.kf.byteOffset, target.kf.byteSize)
-                        }
-
-                        if (data != null) bytesDownloaded += data.size
-                        target to data
-                    }
-                }.awaitAll()
-            }
-        }
-        Logger.d(TAG, "Read ${bytesDownloaded / 1024}KB in ${System.currentTimeMillis() - readStart}ms")
-
-        val successEntries = pairedData.mapNotNull { (target, data) ->
-            data?.let { target to it }
-        }
-
         val decodeStart = System.currentTimeMillis()
-        if (successEntries.isNotEmpty()) {
-            val successDataOnly = successEntries.map { it.second }
-            mp4Extractor.decodeKeyframesRawImage(moovInfo, successDataOnly) { image, outputFormat, codecName, frameIndex ->
-                val target = successEntries.getOrNull(frameIndex)?.first ?: return@decodeKeyframesRawImage
 
-                val forceNV21 = codecName.startsWith("OMX.qcom.", ignoreCase = true)
-                val midW = scaleW * 2
-                val midH = scaleH * 2
-                val scaled = YuvToBitmapBridge.scaleTwoPassFromImage(
-                    image,
-                    midWidth = midW,
-                    midHeight = midH,
-                    dstWidth = scaleW,
-                    dstHeight = scaleH,
-                    forceNV21 = forceNV21,
-                ) ?: return@decodeKeyframesRawImage
+        for (round in 0..FRAME_CANDIDATE_RADIUS) {
+            val pendingTargets = targets.filter { it.gridIndex in pendingGridIndices }
+            if (pendingTargets.isEmpty()) break
 
-                val colorStandard = outputFormat.getInteger(MediaFormat.KEY_COLOR_STANDARD, 1)
-                val colorRange = outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE, 2)
+            val allowFlatFallback = round == FRAME_CANDIDATE_RADIUS
+            val uniqueTargets = selectUniqueFrameTargetsForRound(
+                keyframes = allKeyframes,
+                targets = pendingTargets,
+                round = round,
+                allowFlatFallback = allowFlatFallback,
+            )
+            Logger.d(
+                TAG,
+                "Round $round selected ${uniqueTargets.size} unique candidates " +
+                    "for ${pendingTargets.size} pending cells",
+            )
 
-                var bitmap = YuvToBitmapBridge.imageToBitmap(
-                    yBuf = scaled.y, yRowStride = scaled.strideY, yPixelStride = 1,
-                    uBuf = scaled.u, uRowStride = scaled.strideU, uPixelStride = 1,
-                    vBuf = scaled.v, vRowStride = scaled.strideV, vPixelStride = 1,
-                    cropLeft = 0, cropTop = 0,
-                    cropWidth = scaled.width, cropHeight = scaled.height,
-                    colorStandard = colorStandard, colorRange = colorRange,
-                    forceNV21 = false,
-                ) ?: return@decodeKeyframesRawImage
+            val pairedData: List<Pair<UniqueFrameTarget, ByteArray?>> =
+                uniqueTargets.chunked(MAX_CONCURRENT_DOWNLOADS).flatMap { batch ->
+                    coroutineScope {
+                        batch.map { target ->
+                            async {
+                                val data = if (isLocal) {
+                                    mp4Extractor.readFileRange(source, target.kf.byteOffset, target.kf.byteSize)
+                                } else {
+                                    mp4Extractor.httpRange(source, target.kf.byteOffset, target.kf.byteSize)
+                                }
 
-                if (needsRotation) {
-                    val matrix = android.graphics.Matrix()
-                    matrix.postRotate(moovInfo.rotation.toFloat())
-                    val rotated = android.graphics.Bitmap.createBitmap(
-                        bitmap,
-                        0,
-                        0,
-                        bitmap.width,
-                        bitmap.height,
-                        matrix,
-                        true,
-                    )
-                    bitmap.recycle()
-                    bitmap = rotated
+                                target to data
+                            }
+                        }.awaitAll()
+                    }
                 }
+            bytesDownloaded += pairedData.sumOf { it.second?.size?.toLong() ?: 0L }
 
-                val col = target.gridIndex % gridCols
-                val row = target.gridIndex / gridCols
-                if (YuvToBitmapBridge.compositeToSheet(bitmap, spriteSheet, col, row, thumbW, thumbH, gridCols)) {
-                    framesDownloaded++
-                }
-                bitmap.recycle()
+            val successEntries = pairedData.mapNotNull { (target, data) ->
+                data?.let { target to it }
             }
+            decodedFrames += successEntries.size
+            val batchResult = decodeAndCompositeCandidates(
+                mp4Extractor = mp4Extractor,
+                moovInfo = moovInfo,
+                successEntries = successEntries,
+                spriteSheet = spriteSheet,
+                scaleW = scaleW,
+                scaleH = scaleH,
+                thumbW = thumbW,
+                thumbH = thumbH,
+                gridCols = gridCols,
+                needsRotation = needsRotation,
+            )
+            Logger.d(
+                TAG,
+                "Round $round result: decoded=${successEntries.size}, " +
+                    "nativeSolidSkipped=${batchResult.nativeSolidSkippedCells}, " +
+                    "bitmapSolidSkipped=${batchResult.bitmapSolidSkippedCells}, " +
+                    "composited=${batchResult.compositedGridIndices.size}",
+            )
+            framesComposited += batchResult.compositedGridIndices.size
+            pendingGridIndices.removeAll(batchResult.compositedGridIndices)
         }
-        Logger.d(TAG, "Decoded+scaled+composited $framesDownloaded/${successEntries.size} frames in ${System.currentTimeMillis() - decodeStart}ms")
-        Logger.d("BUG4_SpriteSheet", "Decoded $framesDownloaded/${successEntries.size} frames in ${System.currentTimeMillis() - decodeStart}ms")
 
-        if (framesDownloaded == 0) {
+        Logger.d(TAG, "Read ${bytesDownloaded / 1024}KB in ${System.currentTimeMillis() - readStart}ms")
+        Logger.d(
+            TAG,
+            "Decoded $decodedFrames unique candidates, composited " +
+                "$framesComposited/${targets.size} cells in ${System.currentTimeMillis() - decodeStart}ms",
+        )
+        Logger.d(
+            "BUG4_SpriteSheet",
+            "Decoded $decodedFrames unique candidates, composited " +
+                "$framesComposited/${targets.size}",
+        )
+
+        if (framesComposited == 0) {
             spriteSheet.recycle()
             Logger.w("BUG4_SpriteSheet", "No frames downloaded for ${source.take(100)}")
             Logger.w(TAG, "No frames downloaded for $source")
@@ -287,7 +327,7 @@ object SpriteSheetGenerator {
         Logger.d(
             TAG,
             "Saved ${spriteFile.length() / 1024}KB in ${System.currentTimeMillis() - saveStart}ms. " +
-                "Total: ${totalElapsed}ms, $framesDownloaded frames, ${bytesDownloaded / 1024}KB downloaded",
+                "Total: ${totalElapsed}ms, $framesComposited frames, ${bytesDownloaded / 1024}KB downloaded",
         )
         Logger.d("BUG4_SpriteSheet", "SUCCESS: ${spriteFile.length() / 1024}KB sprite sheet in ${totalElapsed}ms")
         return SpriteSheetResult(spriteFile, metadata)
@@ -368,102 +408,90 @@ object SpriteSheetGenerator {
             Bitmap.Config.ARGB_8888,
         )
 
-        var framesDownloaded = 0
+        val targets = selectFrameTargets(allKeyframes, actualFrameCount, intervalMs)
+        val pendingGridIndices = targets.mapTo(LinkedHashSet<Int>()) { it.gridIndex }
+        var framesComposited = 0
         var bytesDownloaded = 0L
-
-        data class FrameTarget(val gridIndex: Int, val kf: Mp4KeyframeExtractor.KeyframeEntry)
-
-        val targets = (0 until actualFrameCount).mapNotNull { i ->
-            val targetTimeMs = (i * intervalMs).toLong()
-            val kf = allKeyframes.minByOrNull { kotlin.math.abs(it.timeMs - targetTimeMs) }
-            if (kf != null) FrameTarget(i, kf) else null
-        }
-        Logger.d(TAG, "MKV selected ${targets.size} targets out of ${allKeyframes.size} keyframes")
-        Logger.d("BUG4_SpriteSheet", "MKV selected ${targets.size} targets")
-
+        var decodedFrames = 0
         val trackNumber = mkvExtractor.videoTrackNumber
         val readStart = System.currentTimeMillis()
-        val pairedData: List<Pair<FrameTarget, ByteArray?>> = targets.chunked(MAX_CONCURRENT_DOWNLOADS).flatMap { batch ->
-            coroutineScope {
-                batch.map { target ->
-                    async {
-                        val data = mkvExtractor.downloadMkvKeyframe(
-                            source,
-                            target.kf.byteOffset,
-                            target.kf.byteSize,
-                            trackNumber,
-                        )
-                        if (data != null) bytesDownloaded += data.size
-                        target to data
-                    }
-                }.awaitAll()
-            }
-        }
-        Logger.d(TAG, "MKV read ${bytesDownloaded / 1024}KB in ${System.currentTimeMillis() - readStart}ms")
-
-        val successEntries = pairedData.mapNotNull { (target, data) ->
-            data?.let { target to it }
-        }
-
         val decodeStart = System.currentTimeMillis()
-        if (successEntries.isNotEmpty()) {
-            val successDataOnly = successEntries.map { it.second }
-            mp4Extractor.decodeKeyframesRawImage(moovInfo, successDataOnly) { image, outputFormat, codecName, frameIndex ->
-                val target = successEntries.getOrNull(frameIndex)?.first ?: return@decodeKeyframesRawImage
 
-                val forceNV21 = codecName.startsWith("OMX.qcom.", ignoreCase = true)
-                val midW = scaleW * 2
-                val midH = scaleH * 2
-                val scaled = YuvToBitmapBridge.scaleTwoPassFromImage(
-                    image,
-                    midWidth = midW,
-                    midHeight = midH,
-                    dstWidth = scaleW,
-                    dstHeight = scaleH,
-                    forceNV21 = forceNV21,
-                ) ?: return@decodeKeyframesRawImage
+        for (round in 0..FRAME_CANDIDATE_RADIUS) {
+            val pendingTargets = targets.filter { it.gridIndex in pendingGridIndices }
+            if (pendingTargets.isEmpty()) break
 
-                val colorStandard = outputFormat.getInteger(MediaFormat.KEY_COLOR_STANDARD, 1)
-                val colorRange = outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE, 2)
+            val allowFlatFallback = round == FRAME_CANDIDATE_RADIUS
+            val uniqueTargets = selectUniqueFrameTargetsForRound(
+                keyframes = allKeyframes,
+                targets = pendingTargets,
+                round = round,
+                allowFlatFallback = allowFlatFallback,
+            )
+            Logger.d(
+                TAG,
+                "MKV round $round selected ${uniqueTargets.size} unique candidates " +
+                    "for ${pendingTargets.size} pending cells",
+            )
 
-                var bitmap = YuvToBitmapBridge.imageToBitmap(
-                    yBuf = scaled.y, yRowStride = scaled.strideY, yPixelStride = 1,
-                    uBuf = scaled.u, uRowStride = scaled.strideU, uPixelStride = 1,
-                    vBuf = scaled.v, vRowStride = scaled.strideV, vPixelStride = 1,
-                    cropLeft = 0, cropTop = 0,
-                    cropWidth = scaled.width, cropHeight = scaled.height,
-                    colorStandard = colorStandard, colorRange = colorRange,
-                    forceNV21 = false,
-                ) ?: return@decodeKeyframesRawImage
-
-                if (needsRotation) {
-                    val matrix = android.graphics.Matrix()
-                    matrix.postRotate(moovInfo.rotation.toFloat())
-                    val rotated = android.graphics.Bitmap.createBitmap(
-                        bitmap,
-                        0,
-                        0,
-                        bitmap.width,
-                        bitmap.height,
-                        matrix,
-                        true,
-                    )
-                    bitmap.recycle()
-                    bitmap = rotated
+            val pairedData: List<Pair<UniqueFrameTarget, ByteArray?>> =
+                uniqueTargets.chunked(MAX_CONCURRENT_DOWNLOADS).flatMap { batch ->
+                    coroutineScope {
+                        batch.map { target ->
+                            async {
+                                val data = mkvExtractor.downloadMkvKeyframe(
+                                    source,
+                                    target.kf.byteOffset,
+                                    target.kf.byteSize,
+                                    trackNumber,
+                                )
+                                target to data
+                            }
+                        }.awaitAll()
+                    }
                 }
+            bytesDownloaded += pairedData.sumOf { it.second?.size?.toLong() ?: 0L }
 
-                val col = target.gridIndex % gridCols
-                val row = target.gridIndex / gridCols
-                if (YuvToBitmapBridge.compositeToSheet(bitmap, spriteSheet, col, row, thumbW, thumbH, gridCols)) {
-                    framesDownloaded++
-                }
-                bitmap.recycle()
+            val successEntries = pairedData.mapNotNull { (target, data) ->
+                data?.let { target to it }
             }
+            decodedFrames += successEntries.size
+            val batchResult = decodeAndCompositeCandidates(
+                mp4Extractor = mp4Extractor,
+                moovInfo = moovInfo,
+                successEntries = successEntries,
+                spriteSheet = spriteSheet,
+                scaleW = scaleW,
+                scaleH = scaleH,
+                thumbW = thumbW,
+                thumbH = thumbH,
+                gridCols = gridCols,
+                needsRotation = needsRotation,
+            )
+            Logger.d(
+                TAG,
+                "MKV round $round result: decoded=${successEntries.size}, " +
+                    "nativeSolidSkipped=${batchResult.nativeSolidSkippedCells}, " +
+                    "bitmapSolidSkipped=${batchResult.bitmapSolidSkippedCells}, " +
+                    "composited=${batchResult.compositedGridIndices.size}",
+            )
+            framesComposited += batchResult.compositedGridIndices.size
+            pendingGridIndices.removeAll(batchResult.compositedGridIndices)
         }
-        Logger.d(TAG, "MKV decoded+scaled+composited $framesDownloaded/${successEntries.size} frames in ${System.currentTimeMillis() - decodeStart}ms")
-        Logger.d("BUG4_SpriteSheet", "MKV decoded $framesDownloaded/${successEntries.size} frames in ${System.currentTimeMillis() - decodeStart}ms")
 
-        if (framesDownloaded == 0) {
+        Logger.d(TAG, "MKV read ${bytesDownloaded / 1024}KB in ${System.currentTimeMillis() - readStart}ms")
+        Logger.d(
+            TAG,
+            "MKV decoded $decodedFrames unique candidates, composited " +
+                "$framesComposited/${targets.size} cells in ${System.currentTimeMillis() - decodeStart}ms",
+        )
+        Logger.d(
+            "BUG4_SpriteSheet",
+            "MKV decoded $decodedFrames unique candidates, composited " +
+                "$framesComposited/${targets.size}",
+        )
+
+        if (framesComposited == 0) {
             spriteSheet.recycle()
             Logger.w("BUG4_SpriteSheet", "MKV no frames downloaded for ${source.take(100)}")
             Logger.w(TAG, "MKV no frames for $source")
@@ -482,10 +510,220 @@ object SpriteSheetGenerator {
         Logger.d(
             TAG,
             "MKV saved ${spriteFile.length() / 1024}KB in ${System.currentTimeMillis() - saveStart}ms. " +
-                "Total: ${totalElapsed}ms, $framesDownloaded frames, ${bytesDownloaded / 1024}KB downloaded",
+                "Total: ${totalElapsed}ms, $framesComposited frames, ${bytesDownloaded / 1024}KB downloaded",
         )
         Logger.d("BUG4_SpriteSheet", "MKV SUCCESS: ${spriteFile.length() / 1024}KB sprite sheet in ${totalElapsed}ms")
         return SpriteSheetResult(spriteFile, metadata)
+    }
+
+    private fun selectFrameTargets(
+        keyframes: List<Mp4KeyframeExtractor.KeyframeEntry>,
+        frameCount: Int,
+        intervalMs: Double,
+    ): List<FrameTarget> {
+        if (keyframes.isEmpty()) return emptyList()
+        var searchStartIndex = 0
+        return (0 until frameCount).map { gridIndex ->
+            val targetTimeMs = (gridIndex * intervalMs).toLong()
+            val keyframeIndex = findNearestKeyframeIndex(
+                keyframes = keyframes,
+                targetTimeMs = targetTimeMs,
+                startIndex = searchStartIndex,
+            )
+            searchStartIndex = keyframeIndex
+            FrameTarget(
+                gridIndex = gridIndex,
+                targetTimeMs = targetTimeMs,
+                keyframeIndex = keyframeIndex,
+            )
+        }
+    }
+
+    private fun selectUniqueFrameTargetsForRound(
+        keyframes: List<Mp4KeyframeExtractor.KeyframeEntry>,
+        targets: List<FrameTarget>,
+        round: Int,
+        allowFlatFallback: Boolean,
+    ): List<UniqueFrameTarget> = targets.flatMap { target ->
+        candidateIndicesForRound(keyframes, target, round).map { candidateIndex ->
+            keyframes[candidateIndex] to CandidateAssignment(
+                gridIndex = target.gridIndex,
+                allowFlatFallback = allowFlatFallback,
+            )
+        }
+    }.groupBy { (kf, _) -> kf.byteOffset to kf.byteSize }
+        .values
+        .map { grouped ->
+            UniqueFrameTarget(
+                assignments = grouped.map { it.second }.distinctBy { it.gridIndex },
+                kf = grouped.first().first,
+            )
+        }
+
+    private fun candidateIndicesForRound(
+        keyframes: List<Mp4KeyframeExtractor.KeyframeEntry>,
+        target: FrameTarget,
+        round: Int,
+    ): List<Int> {
+        if (round == 0) return listOf(target.keyframeIndex)
+
+        val indices = buildList {
+            val previous = target.keyframeIndex - round
+            val next = target.keyframeIndex + round
+            if (previous >= 0) add(previous)
+            if (next <= keyframes.lastIndex) add(next)
+        }
+        return indices.sortedBy { kotlin.math.abs(keyframes[it].timeMs - target.targetTimeMs) }
+    }
+
+    private fun findNearestKeyframeIndex(
+        keyframes: List<Mp4KeyframeExtractor.KeyframeEntry>,
+        targetTimeMs: Long,
+        startIndex: Int,
+    ): Int {
+        var low = startIndex.coerceIn(0, keyframes.lastIndex)
+        var high = keyframes.lastIndex
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            if (keyframes[mid].timeMs < targetTimeMs) {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+
+        val nextIndex = low
+        val previousIndex = (low - 1).coerceAtLeast(0)
+        val previousDelta = kotlin.math.abs(keyframes[previousIndex].timeMs - targetTimeMs)
+        val nextDelta = kotlin.math.abs(keyframes[nextIndex].timeMs - targetTimeMs)
+        return if (previousDelta <= nextDelta) previousIndex else nextIndex
+    }
+
+    private fun decodeAndCompositeCandidates(
+        mp4Extractor: Mp4KeyframeExtractor,
+        moovInfo: Mp4KeyframeExtractor.MoovInfo,
+        successEntries: List<Pair<UniqueFrameTarget, ByteArray>>,
+        spriteSheet: Bitmap,
+        scaleW: Int,
+        scaleH: Int,
+        thumbW: Int,
+        thumbH: Int,
+        gridCols: Int,
+        needsRotation: Boolean,
+    ): SpriteDecodeBatchResult {
+        if (successEntries.isEmpty()) return SpriteDecodeBatchResult()
+
+        val compositedGridIndices = LinkedHashSet<Int>()
+        var nativeSolidSkippedCells = 0
+        var bitmapSolidSkippedCells = 0
+        val successDataOnly = successEntries.map { it.second }
+        mp4Extractor.decodeKeyframesRawImage(moovInfo, successDataOnly) { image, outputFormat, codecName, frameIndex ->
+            val target = successEntries.getOrNull(frameIndex)?.first ?: return@decodeKeyframesRawImage
+
+            val forceNV21 = codecName.startsWith("OMX.qcom.", ignoreCase = true)
+            val midW = scaleW * 2
+            val midH = scaleH * 2
+            val scaled = YuvToBitmapBridge.scaleTwoPassFromImage(
+                image,
+                midWidth = midW,
+                midHeight = midH,
+                dstWidth = scaleW,
+                dstHeight = scaleH,
+                forceNV21 = forceNV21,
+            ) ?: return@decodeKeyframesRawImage
+
+            val nativeIsSolid = isMostlySolidColorNative(scaled)
+            if (nativeIsSolid == true && target.assignments.none { it.allowFlatFallback }) {
+                nativeSolidSkippedCells += target.assignments.size
+                return@decodeKeyframesRawImage
+            }
+
+            val colorStandard = outputFormat.getInteger(MediaFormat.KEY_COLOR_STANDARD, 1)
+            val colorRange = outputFormat.getInteger(MediaFormat.KEY_COLOR_RANGE, 2)
+
+            var bitmap = YuvToBitmapBridge.imageToBitmap(
+                yBuf = scaled.y,
+                yRowStride = scaled.strideY,
+                yPixelStride = 1,
+                uBuf = scaled.u,
+                uRowStride = scaled.strideU,
+                uPixelStride = 1,
+                vBuf = scaled.v,
+                vRowStride = scaled.strideV,
+                vPixelStride = 1,
+                cropLeft = 0,
+                cropTop = 0,
+                cropWidth = scaled.width,
+                cropHeight = scaled.height,
+                colorStandard = colorStandard,
+                colorRange = colorRange,
+                forceNV21 = false,
+            ) ?: return@decodeKeyframesRawImage
+
+            if (needsRotation) {
+                val matrix = android.graphics.Matrix()
+                matrix.postRotate(moovInfo.rotation.toFloat())
+                val rotated = android.graphics.Bitmap.createBitmap(
+                    bitmap,
+                    0,
+                    0,
+                    bitmap.width,
+                    bitmap.height,
+                    matrix,
+                    true,
+                )
+                bitmap.recycle()
+                bitmap = rotated
+            }
+
+            val isSolid = nativeIsSolid ?: bitmap.isMostlySolidColor()
+            val usableAssignments = target.assignments.filter { assignment ->
+                assignment.gridIndex !in compositedGridIndices &&
+                    (!isSolid || assignment.allowFlatFallback)
+            }
+            if (usableAssignments.isEmpty()) {
+                if (nativeIsSolid == null && isSolid) {
+                    bitmapSolidSkippedCells += target.assignments.size
+                }
+                bitmap.recycle()
+                return@decodeKeyframesRawImage
+            }
+
+            for (assignment in usableAssignments) {
+                val col = assignment.gridIndex % gridCols
+                val row = assignment.gridIndex / gridCols
+                if (YuvToBitmapBridge.compositeToSheet(bitmap, spriteSheet, col, row, thumbW, thumbH, gridCols)) {
+                    compositedGridIndices += assignment.gridIndex
+                }
+            }
+            bitmap.recycle()
+        }
+        return SpriteDecodeBatchResult(
+            compositedGridIndices = compositedGridIndices,
+            nativeSolidSkippedCells = nativeSolidSkippedCells,
+            bitmapSolidSkippedCells = bitmapSolidSkippedCells,
+        )
+    }
+
+    private fun isMostlySolidColorNative(scaled: ScaledYuv): Boolean? {
+        if (!nativeSolidColorCheckAvailable) return null
+        return try {
+            YuvToBitmapBridge.i420IsMostlySolidColor(
+                yBuf = scaled.y,
+                yRowStride = scaled.strideY,
+                uBuf = scaled.u,
+                uRowStride = scaled.strideU,
+                vBuf = scaled.v,
+                vRowStride = scaled.strideV,
+                width = scaled.width,
+                height = scaled.height,
+                threshold = 0.7f,
+                tolerance = 30,
+            )
+        } catch (_: UnsatisfiedLinkError) {
+            nativeSolidColorCheckAvailable = false
+            null
+        }
     }
 
     private fun buildOkHttpClient(httpHeaders: Map<String, String>?): OkHttpClient = OkHttpClient.Builder()
@@ -821,4 +1059,26 @@ data class SpriteSheetMetadata(
 data class SpriteSheetResult(
     val file: File,
     val metadata: SpriteSheetMetadata,
+)
+
+private data class FrameTarget(
+    val gridIndex: Int,
+    val targetTimeMs: Long,
+    val keyframeIndex: Int,
+)
+
+private data class UniqueFrameTarget(
+    val assignments: List<CandidateAssignment>,
+    val kf: Mp4KeyframeExtractor.KeyframeEntry,
+)
+
+private data class CandidateAssignment(
+    val gridIndex: Int,
+    val allowFlatFallback: Boolean,
+)
+
+private data class SpriteDecodeBatchResult(
+    val compositedGridIndices: Set<Int> = emptySet(),
+    val nativeSolidSkippedCells: Int = 0,
+    val bitmapSolidSkippedCells: Int = 0,
 )

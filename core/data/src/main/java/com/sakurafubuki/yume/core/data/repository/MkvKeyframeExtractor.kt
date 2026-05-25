@@ -912,6 +912,7 @@ class MkvKeyframeExtractor(
                 .url(url)
                 .header("Range", "bytes=$start-$end")
                 .header("Accept", "*/*")
+                .header("Accept-Encoding", "identity")
                 .build()
             Logger.d(BUG4_TAG, "MKV httpRange: $start-$end (${size}B)")
             okHttpClient.newCall(request).execute().use { response ->

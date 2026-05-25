@@ -68,6 +68,20 @@ object YuvToBitmapBridge {
     ): Boolean
 
     @JvmStatic
+    external fun i420IsMostlySolidColor(
+        yBuf: ByteBuffer,
+        yRowStride: Int,
+        uBuf: ByteBuffer,
+        uRowStride: Int,
+        vBuf: ByteBuffer,
+        vRowStride: Int,
+        width: Int,
+        height: Int,
+        threshold: Float,
+        tolerance: Int,
+    ): Boolean
+
+    @JvmStatic
     external fun compositeToSheet(
         frameBitmap: Bitmap,
         sheetBitmap: Bitmap,
@@ -105,6 +119,13 @@ object YuvToBitmapBridge {
         dstHeight: Int,
         filterMode: Int,
     ): Bitmap?
+
+    @JvmStatic
+    external fun argbIsMostlySolidColor(
+        bitmap: Bitmap,
+        threshold: Float,
+        tolerance: Int,
+    ): Boolean
 
     fun scaleTwoPassFromImage(
         image: Image,

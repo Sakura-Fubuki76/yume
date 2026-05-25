@@ -7,7 +7,6 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build.VERSION.SDK_INT
 import android.util.Base64
-import androidx.core.graphics.get
 import coil3.ImageLoader
 import coil3.memory.MemoryCache
 import com.sakurafubuki.yume.core.common.Logger
@@ -29,7 +28,6 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.abs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -498,7 +496,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
             }
 
             val finalResult = if (thumbnailGenerationStrategy == ThumbnailGenerationStrategy.HYBRID && binaryResult != null) {
-                if (binaryResult.bitmap.isSolidColor()) {
+                if (binaryResult.bitmap.isMostlySolidColor()) {
                     val retryResult = try {
                         kotlinx.coroutines.withTimeout(15000L) {
                             mp4KeyframeExtractor.extractKeyframeWithMetadata(streamUrl, thumbnailFramePosition)
@@ -728,7 +726,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                     target = SOLID_PROBE_FRAME_SIZE to SOLID_PROBE_FRAME_SIZE,
                 )
                 val isProbeSolid = probeFrame?.let { probe ->
-                    val solid = isSolidColor(probe)
+                    val solid = probe.isMostlySolidColor()
                     probe.recycle()
                     solid
                 } ?: true
@@ -742,7 +740,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                 }
             } else if (!isNative && ffmpegRetriever != null) {
                 val firstFrame = runCatching { ffmpegRetriever.getFrameAtTime(0) }.getOrNull()
-                if (firstFrame != null && !isSolidColor(firstFrame)) {
+                if (firstFrame != null && !firstFrame.isMostlySolidColor()) {
                     firstFrame
                 } else {
                     val timeUs = (durationMs * framePosition * 1000).toLong()
@@ -793,53 +791,6 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         }
         return runCatching { getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) }.getOrNull()
             ?: runCatching { getFrameAtTime(timeUs) }.getOrNull()
-    }
-
-    private fun isSolidColor(bitmap: Bitmap, threshold: Float = 0.7f): Boolean {
-        val width = bitmap.width
-        val height = bitmap.height
-
-        val marginX = width / 10
-        val marginY = height / 10
-        val sampleAreaRight = width - marginX
-        val sampleAreaBottom = height - marginY
-
-        val gridSize = 10
-        val stepX = (sampleAreaRight - marginX) / gridSize
-        val stepY = (sampleAreaBottom - marginY) / gridSize
-
-        if (stepX <= 0 || stepY <= 0) return false
-
-        val sampledColors = mutableListOf<Int>()
-
-        for (x in 0 until gridSize) {
-            for (y in 0 until gridSize) {
-                val pixelX = marginX + x * stepX
-                val pixelY = marginY + y * stepY
-                if (pixelX < width && pixelY < height) {
-                    sampledColors.add(bitmap.getPixel(pixelX, pixelY))
-                }
-            }
-        }
-
-        if (sampledColors.isEmpty()) return false
-
-        val referenceColor = sampledColors[0]
-        val referenceR = (referenceColor shr 16) and 0xFF
-        val referenceG = (referenceColor shr 8) and 0xFF
-        val referenceB = referenceColor and 0xFF
-
-        val tolerance = 30
-        val similarCount = sampledColors.count { color ->
-            val r = (color shr 16) and 0xFF
-            val g = (color shr 8) and 0xFF
-            val b = color and 0xFF
-            kotlin.math.abs(r - referenceR) <= tolerance &&
-                kotlin.math.abs(g - referenceG) <= tolerance &&
-                kotlin.math.abs(b - referenceB) <= tolerance
-        }
-
-        return (similarCount.toFloat() / sampledColors.size) >= threshold
     }
 
     private fun buildRetrieverHeaders(server: WebDavServer): Map<String, String> {
@@ -1038,46 +989,6 @@ private inline fun <T> MediaThumbnailRetriever.useFfmpeg(block: (MediaThumbnailR
     } finally {
         release()
     }
-}
-
-private fun Bitmap.isSolidColor(threshold: Float = 0.7f): Boolean {
-    val width = this.width
-    val height = this.height
-    val marginX = width / 10
-    val marginY = height / 10
-    val sampleAreaRight = width - marginX
-    val sampleAreaBottom = height - marginY
-    val gridSize = 10
-    val stepX = (sampleAreaRight - marginX) / gridSize
-    val stepY = (sampleAreaBottom - marginY) / gridSize
-    if (stepX <= 0 || stepY <= 0) return false
-
-    val sampledColors = mutableListOf<Int>()
-    for (x in 0 until gridSize) {
-        for (y in 0 until gridSize) {
-            val pixelX = marginX + x * stepX
-            val pixelY = marginY + y * stepY
-            if (pixelX < width && pixelY < height) {
-                sampledColors.add(this[pixelX, pixelY])
-            }
-        }
-    }
-    if (sampledColors.isEmpty()) return false
-
-    val referenceColor = sampledColors[0]
-    val referenceR = (referenceColor shr 16) and 0xFF
-    val referenceG = (referenceColor shr 8) and 0xFF
-    val referenceB = referenceColor and 0xFF
-    val tolerance = 30
-    val similarCount = sampledColors.count { color ->
-        val r = (color shr 16) and 0xFF
-        val g = (color shr 8) and 0xFF
-        val b = color and 0xFF
-        abs(r - referenceR) <= tolerance &&
-            abs(g - referenceG) <= tolerance &&
-            abs(b - referenceB) <= tolerance
-    }
-    return similarCount.toFloat() / sampledColors.size >= threshold
 }
 
 private const val SQL_BIND_CHUNK_SIZE = 900

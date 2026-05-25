@@ -406,6 +406,7 @@ class Mp4KeyframeExtractor(
                 .url(url)
                 .header("Range", "bytes=$start-$end")
                 .header("Accept", "*/*")
+                .header("Accept-Encoding", "identity")
                 .build()
             Logger.d("BUG4_HttpExtractor", "httpRange: url=${url.take(100)} range=$start-$end")
             okHttpClient.newCall(request).execute().use { response ->

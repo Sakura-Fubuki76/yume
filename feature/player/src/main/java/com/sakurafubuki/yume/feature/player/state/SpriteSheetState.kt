@@ -24,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 @Stable
 class SpriteSheetState(
@@ -132,9 +133,19 @@ class SpriteSheetState(
     }
 
     private fun cacheKey(mediaId: String, durationMs: Long): String {
-        val input = "$mediaId|$durationMs"
+        val input = "${stableMediaIdForCache(mediaId)}|$durationMs"
         return MessageDigest.getInstance("MD5").digest(input.toByteArray())
             .joinToString("") { "%02x".format(it) }
+    }
+
+    private fun stableMediaIdForCache(mediaId: String): String {
+        val parsed = mediaId.toHttpUrlOrNull() ?: return mediaId
+        val builder = parsed.newBuilder()
+            .username("")
+            .password("")
+            .fragment(null)
+        builder.removeAllQueryParameters("sign")
+        return builder.build().toString()
     }
 
     private fun resolveSource(mediaId: String): String = when {
