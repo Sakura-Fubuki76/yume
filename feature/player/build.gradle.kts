@@ -67,7 +67,9 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.datasource)
     implementation(libs.androidx.media3.datasource.okhttp)
+    implementation(libs.androidx.media3.database)
     implementation(libs.androidx.media3.effect)
     implementation(libs.yume.lib)
 

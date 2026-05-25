@@ -21,7 +21,13 @@ import androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.database.StandaloneDatabaseProvider
+import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
+import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
+import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.effect.GlEffect
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -123,6 +129,9 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 
 private const val TAG = "PlayerService"
 private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
+private const val STREAMING_CACHE_DIR = "streaming_media"
+private const val STREAMING_CACHE_MAX_BYTES = 64L * 1024L * 1024L
+private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
 
@@ -183,6 +192,8 @@ class PlayerService : MediaSessionService() {
 
     private lateinit var mp4Extractor: Mp4KeyframeExtractor
     private lateinit var mkvExtractor: MkvKeyframeExtractor
+    private var streamingCache: SimpleCache? = null
+    private var streamingCacheDataSourceFactory: CacheDataSource.Factory? = null
 
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var currentVolumeGain: Int = 0
@@ -448,19 +459,11 @@ class PlayerService : MediaSessionService() {
 
         prebufferJob?.cancel()
         prebufferJob = serviceScope.launch(Dispatchers.IO) {
-            try {
-                val request = Request.Builder()
-                    .url(nextUrl)
-                    .header("Range", "bytes=0-2097151")
-                    .header("Accept-Encoding", "identity")
-                    .build()
-                okHttpClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        drainResponseBody(response.body)
-                    }
-                }
-            } catch (_: Exception) {
-            }
+            cacheHttpRange(
+                url = nextUrl,
+                position = 0L,
+                length = NEXT_MEDIA_PREBUFFER_BYTES,
+            )
         }
     }
 
@@ -475,30 +478,39 @@ class PlayerService : MediaSessionService() {
             val keyframe = MoovIndexCache.findNearestKeyframe(url, currentPosMs)
                 ?: return@launch
 
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("Range", "bytes=${keyframe.byteOffset}-${keyframe.byteOffset + keyframe.byteSize - 1}")
-                    .header("Accept-Encoding", "identity")
-                    .build()
-                okHttpClient.newCall(request).execute().use { response ->
-                    if (response.isSuccessful) {
-                        drainResponseBody(response.body)
-                    }
-                }
-            } catch (_: Exception) {
-            }
+            cacheHttpRange(
+                url = url,
+                position = keyframe.byteOffset,
+                length = keyframe.byteSize.toLong(),
+            )
         }
     }
 
     private fun String.isHttpUrl(): Boolean = startsWith("http://", ignoreCase = true) || startsWith("https://", ignoreCase = true)
 
-    private fun drainResponseBody(body: okhttp3.ResponseBody?) {
-        body?.source()?.use { source ->
-            val sink = okio.Buffer()
-            while (source.read(sink, 8192L) != -1L) {
-                sink.clear()
-            }
+    private fun cacheHttpRange(
+        url: String,
+        position: Long,
+        length: Long,
+    ) {
+        if (length <= 0L) return
+        val cacheDataSourceFactory = streamingCacheDataSourceFactory ?: return
+        runCatching {
+            val dataSpec = DataSpec.Builder()
+                .setUri(url)
+                .setKey(url)
+                .setPosition(position)
+                .setLength(length)
+                .setFlags(DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION or DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
+                .build()
+            CacheWriter(
+                cacheDataSourceFactory.createDataSourceForDownloading(),
+                dataSpec,
+                ByteArray(CacheWriter.DEFAULT_BUFFER_SIZE_BYTES),
+                null,
+            ).cache()
+        }.onFailure { error ->
+            Logger.d(TAG, "cacheHttpRange failed: ${error.message}")
         }
     }
 
@@ -754,18 +766,7 @@ class PlayerService : MediaSessionService() {
                     }
                 }
 
-                var builder = request.newBuilder()
-                if (request.header("Range") != null) {
-                    builder = builder.header("Accept-Encoding", "identity")
-                }
-                var finalRequest = builder.build()
-
-                if (Utils.isBaiduNetdiskUrl(finalRequest.url.toString())) {
-                    Logger.d("BUG4_PlayerService", "Baidu detected for streaming: ${finalRequest.url.toString().take(100)}")
-                    finalRequest = finalRequest.newBuilder()
-                        .header("User-Agent", "pan.baidu.com")
-                        .build()
-                }
+                var finalRequest = request.withStreamingNetworkHeaders()
 
                 if (finalRequest.header("Authorization") != null) {
                     return@addInterceptor chain.proceed(finalRequest)
@@ -781,6 +782,9 @@ class PlayerService : MediaSessionService() {
                         .build()
                 }
                 chain.proceed(finalRequest)
+            }
+            .addNetworkInterceptor { chain ->
+                chain.proceed(chain.request().withStreamingNetworkHeaders())
             }
             .authenticator { _, response ->
                 val requestUri = response.request.url
@@ -806,10 +810,26 @@ class PlayerService : MediaSessionService() {
         }
 
         val upstreamFactory = OkHttpDataSource.Factory(okHttpClient)
+        val streamingCache = createStreamingCache()
+        this.streamingCache = streamingCache
+        val prefetchCacheDataSourceFactory = streamingCache?.let { cache ->
+            CacheDataSource.Factory()
+                .setCache(cache)
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        }
+        streamingCacheDataSourceFactory = prefetchCacheDataSourceFactory
+        val playbackDataSourceFactory = streamingCache?.let { cache ->
+            CacheDataSource.Factory()
+                .setCache(cache)
+                .setUpstreamDataSourceFactory(upstreamFactory)
+                .setCacheWriteDataSinkFactory(null)
+                .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+        }
 
         val defaultDataSourceFactory = DefaultDataSource.Factory(
             applicationContext,
-            upstreamFactory,
+            playbackDataSourceFactory ?: upstreamFactory,
         )
 
         val loadControl = ScrubbingAwareLoadControl(
@@ -894,6 +914,8 @@ class PlayerService : MediaSessionService() {
     override fun onDestroy() {
         super.onDestroy()
         artworkLoadJob?.cancel()
+        prebufferJob?.cancel()
+        scrubPrefetchJob?.cancel()
         loudnessEnhancer?.release()
         loudnessEnhancer = null
         mediaSession?.run {
@@ -905,6 +927,9 @@ class PlayerService : MediaSessionService() {
             mediaSession = null
         }
         subtitleCacheDir.deleteFiles()
+        streamingCacheDataSourceFactory = null
+        streamingCache?.release()
+        streamingCache = null
         serviceScope.cancel()
     }
 
@@ -1390,6 +1415,27 @@ class PlayerService : MediaSessionService() {
         .fragment(null)
         .build()
         .toString()
+
+    private fun createStreamingCache(): SimpleCache? = runCatching {
+        SimpleCache(
+            File(cacheDir, STREAMING_CACHE_DIR),
+            LeastRecentlyUsedCacheEvictor(STREAMING_CACHE_MAX_BYTES),
+            StandaloneDatabaseProvider(applicationContext),
+        )
+    }.onFailure { error ->
+        Logger.w(TAG, "Failed to create streaming cache", error)
+    }.getOrNull()
+
+    private fun Request.withStreamingNetworkHeaders(): Request {
+        var builder = newBuilder()
+        if (header("Range") != null) {
+            builder = builder.header("Accept-Encoding", "identity")
+        }
+        if (Utils.isBaiduNetdiskUrl(url.toString())) {
+            builder = builder.header("User-Agent", "pan.baidu.com")
+        }
+        return builder.build()
+    }
 
     private fun buildAuthorizationHeader(url: HttpUrl): String? {
         findMatchingWebDavServer(url)?.let { matchedServer ->

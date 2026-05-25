@@ -104,6 +104,8 @@ object Utils {
 
     fun isBaiduNetdiskUrl(url: String): Boolean {
         if (url.contains("pan.baidu.com", ignoreCase = true)) return true
+        if (url.contains("baidupcs.com", ignoreCase = true)) return true
+        if (url.contains("baidupcs.net", ignoreCase = true)) return true
         if (url.contains("%E7%99%BE%E5%BA%A6%E7%BD%91%E7%9B%98")) return true
         return false
     }
