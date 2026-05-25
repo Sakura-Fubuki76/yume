@@ -125,6 +125,16 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    fun updateSelectedSubtitle(uri: String, subtitleTrackIndex: Int?, selectedSubtitleUri: Uri?) {
+        viewModelScope.launch {
+            mediaRepository.updateMediumSubtitleSelection(
+                uri = uri,
+                subtitleTrackIndex = subtitleTrackIndex,
+                selectedSubtitleUri = selectedSubtitleUri,
+            )
+        }
+    }
+
     private fun updateSubtitleDelay(uri: String, delay: Long) {
         viewModelScope.launch {
             mediaRepository.updateSubtitleDelay(uri, delay)

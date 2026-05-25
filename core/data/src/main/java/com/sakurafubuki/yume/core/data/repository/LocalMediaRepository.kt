@@ -91,11 +91,24 @@ class LocalMediaRepository @Inject constructor(
     }
 
     override suspend fun updateMediumSubtitleTrack(uri: String, subtitleTrackIndex: Int) {
+        updateMediumSubtitleSelection(
+            uri = uri,
+            subtitleTrackIndex = subtitleTrackIndex,
+            selectedSubtitleUri = null,
+        )
+    }
+
+    override suspend fun updateMediumSubtitleSelection(
+        uri: String,
+        subtitleTrackIndex: Int?,
+        selectedSubtitleUri: Uri?,
+    ) {
         val stateEntity = mediumStateDao.get(uri) ?: MediumStateEntity(uriString = uri)
 
         mediumStateDao.upsert(
             mediumState = stateEntity.copy(
                 subtitleTrackIndex = subtitleTrackIndex,
+                selectedSubtitleUri = selectedSubtitleUri?.toString(),
                 lastPlayedTime = System.currentTimeMillis(),
             ),
         )

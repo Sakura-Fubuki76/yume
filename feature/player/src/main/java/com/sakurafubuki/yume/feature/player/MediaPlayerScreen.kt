@@ -70,7 +70,9 @@ import com.sakurafubuki.yume.feature.player.buttons.NextButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayPauseButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayerButton
 import com.sakurafubuki.yume.feature.player.buttons.PreviousButton
+import com.sakurafubuki.yume.feature.player.extensions.copy as copyMediaItem
 import com.sakurafubuki.yume.feature.player.extensions.nameRes
+import com.sakurafubuki.yume.feature.player.extensions.selectedSubtitleUri
 import com.sakurafubuki.yume.feature.player.state.ControlsVisibilityState
 import com.sakurafubuki.yume.feature.player.state.VerticalGesture
 import com.sakurafubuki.yume.feature.player.state.rememberBrightnessState
@@ -160,6 +162,15 @@ fun MediaPlayerScreen(
         val mediaId = currentMediaId
         selectedAssUri = null
         if (mediaId.isNullOrBlank()) return@LaunchedEffect
+        player.currentMediaItem
+            ?.mediaMetadata
+            ?.selectedSubtitleUri
+            ?.toUri()
+            ?.takeIf { it.isAssSubtitleUri() }
+            ?.let { persistedAssUri ->
+                selectedAssUri = persistedAssUri
+                return@LaunchedEffect
+            }
         repeat(20) {
             val autoUri = AssSubtitleState.autoSelectAssByMediaId.remove(mediaId)
             if (autoUri != null) {
@@ -511,7 +522,24 @@ fun MediaPlayerScreen(
                 onDismiss = { overlayView = null },
                 onSelectSubtitleClick = onSelectSubtitleClick,
                 onAssTrackSelected = { uriStr ->
-                    selectedAssUri = if (uriStr.isBlank()) null else uriStr.toUri()
+                    val uri = if (uriStr.isBlank()) null else uriStr.toUri()
+                    selectedAssUri = uri
+                    if (uri != null) {
+                        player.currentMediaItem?.let { currentMediaItem ->
+                            player.replaceMediaItem(
+                                player.currentMediaItemIndex,
+                                currentMediaItem.copyMediaItem(
+                                    subtitleTrackIndex = -1,
+                                    selectedSubtitleUri = uri.toString(),
+                                ),
+                            )
+                            viewModel.updateSelectedSubtitle(
+                                uri = currentMediaItem.mediaId,
+                                subtitleTrackIndex = -1,
+                                selectedSubtitleUri = uri,
+                            )
+                        }
+                    }
                 },
                 selectedAssUri = selectedAssUri,
                 onSubtitleOptionEvent = viewModel::onSubtitleOptionEvent,
@@ -630,4 +658,9 @@ fun PlayerControlsView(
 
         middleView()
     }
+}
+
+private fun Uri.isAssSubtitleUri(): Boolean {
+    val path = lastPathSegment ?: path ?: toString()
+    return path.endsWith(".ass", ignoreCase = true) || path.endsWith(".ssa", ignoreCase = true)
 }

@@ -38,7 +38,7 @@ import com.sakurafubuki.yume.core.database.entities.WebDavVideoMetadataEntity
         WebDavDirectoryItemEntity::class,
         ImageDimensionEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = true,
 )
 abstract class MediaDatabase : RoomDatabase() {
@@ -77,6 +77,7 @@ abstract class MediaDatabase : RoomDatabase() {
                 MIGRATION_11_12,
                 MIGRATION_12_13,
                 MIGRATION_13_14,
+                MIGRATION_14_15,
             )
         }
 
@@ -404,6 +405,12 @@ abstract class MediaDatabase : RoomDatabase() {
                     ON `webdav_directory_items` (`server_id`, `updated_at`)
                     """,
                 )
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `media_state` ADD COLUMN `selected_subtitle_uri` TEXT")
             }
         }
     }

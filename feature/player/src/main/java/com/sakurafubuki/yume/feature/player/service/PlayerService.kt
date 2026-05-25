@@ -93,6 +93,7 @@ import com.sakurafubuki.yume.feature.player.extensions.copy
 import com.sakurafubuki.yume.feature.player.extensions.getManuallySelectedTrackIndex
 import com.sakurafubuki.yume.feature.player.extensions.playbackSpeed
 import com.sakurafubuki.yume.feature.player.extensions.positionMs
+import com.sakurafubuki.yume.feature.player.extensions.selectedSubtitleUri
 import com.sakurafubuki.yume.feature.player.extensions.setExtras
 import com.sakurafubuki.yume.feature.player.extensions.setIsScrubbingModeEnabled
 import com.sakurafubuki.yume.feature.player.extensions.subtitleDelayMilliseconds
@@ -134,6 +135,11 @@ private const val STREAMING_CACHE_MAX_BYTES = 64L * 1024L * 1024L
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
+private val SUBTITLE_EPISODE_REGEX = listOf(
+    Regex("""(?i)(?:^|[\s._\-\[(])(?:ep?|episode)\s*0*(\d{1,4})(?=$|[\s._\-\]\)])"""),
+    Regex("""(?:^|[\s._\-\[(第])0*(\d{1,4})(?:v\d+)?(?:话|話|集)?(?=$|[\s._\-\]\)])"""),
+)
+private val COMMON_NON_EPISODE_NUMBERS = setOf(480, 720, 1080, 1440, 2160, 264, 265)
 
 @OptIn(UnstableApi::class)
 @AndroidEntryPoint
@@ -289,8 +295,14 @@ class PlayerService : MediaSessionService() {
                 mediaSession?.player?.mediaMetadata?.audioTrackIndex?.let {
                     mediaSession?.player?.switchTrack(C.TRACK_TYPE_AUDIO, it)
                 }
-                mediaSession?.player?.mediaMetadata?.subtitleTrackIndex?.let {
-                    mediaSession?.player?.switchTrack(C.TRACK_TYPE_TEXT, it)
+                mediaSession?.player?.run {
+                    val selectedSubtitleUri = mediaMetadata.selectedSubtitleUri
+                    val selectedSubtitleTrackIndex = selectedSubtitleUri
+                        ?.let { findSubtitleTrackIndexByUri(it.toUri()) }
+                        ?: mediaMetadata.subtitleTrackIndex
+                    selectedSubtitleTrackIndex?.let {
+                        switchTrack(C.TRACK_TYPE_TEXT, it)
+                    }
                 }
             }
         }
@@ -302,6 +314,9 @@ class PlayerService : MediaSessionService() {
 
             val audioTrackIndex = player.getManuallySelectedTrackIndex(C.TRACK_TYPE_AUDIO)
             val subtitleTrackIndex = player.getManuallySelectedTrackIndex(C.TRACK_TYPE_TEXT)
+            val selectedSubtitleUri = subtitleTrackIndex
+                ?.takeIf { it >= 0 }
+                ?.let { player.findSubtitleUriByTrackIndex(it) }
 
             if (audioTrackIndex != null) {
                 serviceScope.launch {
@@ -314,9 +329,10 @@ class PlayerService : MediaSessionService() {
 
             if (subtitleTrackIndex != null) {
                 serviceScope.launch {
-                    mediaRepository.updateMediumSubtitleTrack(
+                    mediaRepository.updateMediumSubtitleSelection(
                         uri = currentMediaItem.mediaId,
                         subtitleTrackIndex = subtitleTrackIndex,
+                        selectedSubtitleUri = selectedSubtitleUri,
                     )
                 }
             }
@@ -326,6 +342,11 @@ class PlayerService : MediaSessionService() {
                 currentMediaItem.copy(
                     audioTrackIndex = audioTrackIndex,
                     subtitleTrackIndex = subtitleTrackIndex,
+                    selectedSubtitleUri = if (subtitleTrackIndex != null) {
+                        selectedSubtitleUri?.toString()
+                    } else {
+                        currentMediaItem.mediaMetadata.selectedSubtitleUri
+                    },
                 ),
             )
         }
@@ -1017,18 +1038,24 @@ class PlayerService : MediaSessionService() {
             }
         } ?: emptyList()
 
-        val hasPriorTrackSelection = mediaItem.mediaMetadata.subtitleTrackIndex != null ||
-            videoState?.subtitleTrackIndex != null
+        val savedSubtitleTrackIndex = mediaItem.mediaMetadata.subtitleTrackIndex ?: videoState?.subtitleTrackIndex
+        val savedSubtitleUri = mediaItem.mediaMetadata.selectedSubtitleUri?.toUri() ?: videoState?.selectedSubtitleUri
+        val hasPriorTrackSelection = savedSubtitleTrackIndex != null
         val hasPriorSubConfigSelection = existingSubConfigurations.any {
             it.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0
         }
-        val shouldAutoSelect = !hasPriorTrackSelection &&
+
+        val allSubUris = (localSubs + externalSubs).distinctBy { it.toString() }
+        val savedCandidateUri = savedSubtitleUri?.let { savedUri ->
+            allSubUris.firstOrNull { it.toString() == savedUri.toString() }
+        }
+        val shouldAutoSelect = savedCandidateUri == null &&
+            savedSubtitleTrackIndex != -1 &&
+            !hasPriorTrackSelection &&
             !hasPriorSubConfigSelection &&
             playerPreferences.rememberSelections
-
-        val allSubUris = localSubs + externalSubs
-        val bestCandidateUri: Uri? = if (shouldAutoSelect) {
-            findBestSubtitleCandidate(allSubUris)
+        val bestCandidateUri = savedCandidateUri ?: if (shouldAutoSelect) {
+            findBestSubtitleCandidate(mediaItem, allSubUris)
         } else {
             null
         }
@@ -1036,6 +1063,7 @@ class PlayerService : MediaSessionService() {
             Logger.d(
                 "PlayerService",
                 "subtitleAutoSelect: shouldAutoSelect=$shouldAutoSelect, " +
+                    "savedCandidate=$savedCandidateUri, " +
                     "bestCandidate=$bestCandidateUri, allSubs=$allSubUris",
             )
         }
@@ -1052,8 +1080,15 @@ class PlayerService : MediaSessionService() {
         } else {
             assUris.firstOrNull()
         }
-        if (bestAssUri != null && shouldAutoSelect) {
+        if (bestCandidateUri != null && bestCandidateUri == bestAssUri) {
             AssSubtitleState.autoSelectAssByMediaId[mediaItem.mediaId] = bestAssUri
+        }
+        if (shouldAutoSelect && bestCandidateUri != null) {
+            mediaRepository.updateMediumSubtitleSelection(
+                uri = mediaItem.mediaId,
+                subtitleTrackIndex = if (bestCandidateUri == bestAssUri) -1 else null,
+                selectedSubtitleUri = bestCandidateUri,
+            )
         }
         val subConfigurations = nonAssUris.map { subtitleUri ->
             uriToSubtitleConfiguration(
@@ -1083,7 +1118,12 @@ class PlayerService : MediaSessionService() {
         val videoScale = mediaItem.mediaMetadata.videoZoom ?: videoState?.videoScale
         val playbackSpeed = mediaItem.mediaMetadata.playbackSpeed ?: videoState?.playbackSpeed
         val audioTrackIndex = mediaItem.mediaMetadata.audioTrackIndex ?: videoState?.audioTrackIndex
-        val subtitleTrackIndex = mediaItem.mediaMetadata.subtitleTrackIndex ?: videoState?.subtitleTrackIndex
+        val subtitleTrackIndex = if (bestCandidateUri != null && bestCandidateUri in assUris) {
+            -1
+        } else {
+            savedSubtitleTrackIndex
+        }
+        val selectedSubtitleUri = bestCandidateUri ?: savedSubtitleUri
         val subtitleDelay = mediaItem.mediaMetadata.subtitleDelayMilliseconds ?: videoState?.subtitleDelayMilliseconds
         val subtitleSpeed = mediaItem.mediaMetadata.subtitleSpeed ?: videoState?.subtitleSpeed
 
@@ -1100,6 +1140,7 @@ class PlayerService : MediaSessionService() {
                         playbackSpeed = playbackSpeed,
                         audioTrackIndex = audioTrackIndex,
                         subtitleTrackIndex = subtitleTrackIndex,
+                        selectedSubtitleUri = selectedSubtitleUri?.toString(),
                         subtitleDelayMilliseconds = subtitleDelay,
                         subtitleSpeed = subtitleSpeed,
                     )
@@ -1132,6 +1173,93 @@ class PlayerService : MediaSessionService() {
 
         return null
     }
+
+    private fun findBestSubtitleCandidate(mediaItem: MediaItem, subtitleUris: List<Uri>): Uri? {
+        if (subtitleUris.isEmpty()) return null
+
+        val videoName = mediaItem.mediaMetadata.title?.toString()
+            ?: getFilenameFromUri(mediaItem.mediaId.toUri())
+        val scoredCandidates = subtitleUris.mapIndexedNotNull { index, uri ->
+            scoreSubtitleCandidate(videoName, uri)?.let { score ->
+                ScoredSubtitleCandidate(uri = uri, score = score, index = index)
+            }
+        }
+        return scoredCandidates.maxWithOrNull(
+            compareBy<ScoredSubtitleCandidate> { it.score }
+                .thenBy { -it.index },
+        )?.uri
+    }
+
+    private fun scoreSubtitleCandidate(videoName: String, subtitleUri: Uri): Int? {
+        val subtitleName = subtitleUri.subtitleFileName()
+        val titleScore = subtitleTitleScore(videoName, subtitleName) ?: return null
+        val videoEpisode = extractSubtitleEpisode(videoName)
+        val subtitleEpisode = extractSubtitleEpisode(subtitleName)
+        if (videoEpisode != null && subtitleEpisode != null && videoEpisode != subtitleEpisode) return null
+
+        val episodeScore = when {
+            videoEpisode != null && subtitleEpisode == videoEpisode -> 100
+            videoEpisode == null && subtitleEpisode == null -> 20
+            else -> 0
+        }
+        return titleScore +
+            episodeScore +
+            subtitleLanguageScore(subtitleName) +
+            subtitleExtensionScore(subtitleName)
+    }
+
+    private fun subtitleTitleScore(videoName: String, subtitleName: String): Int? {
+        val normalizedVideoName = normalizeSubtitleMatchName(videoName)
+        val normalizedSubtitleName = normalizeSubtitleMatchName(subtitleName)
+        return when {
+            normalizedVideoName.isNotEmpty() && normalizedVideoName == normalizedSubtitleName -> 80
+            normalizedVideoName.isNotEmpty() && normalizedSubtitleName.startsWith(normalizedVideoName) -> 60
+            fuzzyMatchNames(videoName, subtitleName) -> 30
+            else -> null
+        }
+    }
+
+    private fun subtitleLanguageScore(name: String): Int {
+        val lowerName = name.lowercase()
+        val compactName = lowerName.replace(Regex("""[\s._\-\[\]()]"""), "")
+        val tokens = lowerName.split(Regex("""[^a-z0-9]+""")).filter { it.isNotBlank() }.toSet()
+        val simplifiedTokens = setOf("sc", "chs", "gb", "gb2312", "gbk", "hans", "cn")
+        val simplifiedTextMarkers = listOf("简", "简体", "简中", "中简", "zhhans", "zhcn")
+        val chineseTextMarkers = listOf("中文", "双语")
+        return when {
+            tokens.any { it in simplifiedTokens } ||
+                simplifiedTextMarkers.any { compactName.contains(it) } -> 60
+            chineseTextMarkers.any { compactName.contains(it) } ||
+                tokens.any { it == "chi" || it == "zh" || it == "chinese" } -> 30
+            else -> 0
+        }
+    }
+
+    private fun subtitleExtensionScore(name: String): Int = when {
+        name.endsWith(".ass", ignoreCase = true) -> 20
+        name.endsWith(".ssa", ignoreCase = true) -> 18
+        name.endsWith(".srt", ignoreCase = true) -> 12
+        name.endsWith(".vtt", ignoreCase = true) -> 8
+        else -> 0
+    }
+
+    private fun normalizeSubtitleMatchName(name: String): String = name
+        .substringBeforeLast('.', name)
+        .replace(Regex("""(?i)\b(?:sc|chs|gb|gb2312|gbk|zh[-_ ]?hans|zh[-_ ]?cn|hans|cn|chi|chinese)\b"""), " ")
+        .replace(Regex("""简体|简中|中简|中文|双语"""), " ")
+        .replace(Regex("""(?i)\b(?:ass|ssa|srt|vtt|ttml)\b"""), " ")
+        .replace(Regex("""[\s._\-\[\]()/+&|]+"""), " ")
+        .trim()
+        .lowercase()
+
+    private fun extractSubtitleEpisode(name: String): Int? {
+        val matches = SUBTITLE_EPISODE_REGEX.flatMap { regex -> regex.findAll(name).toList() }
+        return matches
+            .mapNotNull { match -> match.groupValues.getOrNull(1)?.toIntOrNull() }
+            .firstOrNull { it !in COMMON_NON_EPISODE_NUMBERS }
+    }
+
+    private fun Uri.subtitleFileName(): String = lastPathSegment ?: path?.substringAfterLast('/') ?: toString()
 
     private fun getDefaultArtworkUri(): Uri = Uri.Builder().apply {
         val defaultArtwork = R.drawable.artwork_default
@@ -1437,6 +1565,36 @@ class PlayerService : MediaSessionService() {
         return builder.build()
     }
 
+    private fun Player.findSubtitleTrackIndexByUri(uri: Uri): Int? {
+        val target = uri.toString()
+        val subtitleConfigs = currentMediaItem?.localConfiguration?.subtitleConfigurations.orEmpty()
+        val matchingConfig = subtitleConfigs.firstOrNull { config ->
+            config.id == target || config.uri.toString() == target
+        } ?: return null
+        val matchingId = matchingConfig.id ?: matchingConfig.uri.toString()
+        return currentTracks.groups
+            .filter { it.type == C.TRACK_TYPE_TEXT }
+            .indexOfFirst { group ->
+                group.mediaTrackGroup.getFormat(0).id == matchingId
+            }
+            .takeIf { it >= 0 }
+    }
+
+    private fun Player.findSubtitleUriByTrackIndex(trackIndex: Int): Uri? {
+        val trackGroup = currentTracks.groups
+            .filter { it.type == C.TRACK_TYPE_TEXT }
+            .getOrNull(trackIndex) ?: return null
+        val trackId = trackGroup.mediaTrackGroup.getFormat(0).id
+        val matchingConfig = currentMediaItem
+            ?.localConfiguration
+            ?.subtitleConfigurations
+            .orEmpty()
+            .firstOrNull { config ->
+                config.id == trackId || config.uri.toString() == trackId
+            } ?: return null
+        return (matchingConfig.id ?: matchingConfig.uri.toString()).toUri()
+    }
+
     private fun buildAuthorizationHeader(url: HttpUrl): String? {
         findMatchingWebDavServer(url)?.let { matchedServer ->
             buildAuthorizationHeader(
@@ -1512,6 +1670,12 @@ private data class RemoteSubtitleProbeResult(
 private data class RemoteSubtitleProbeCacheEntry(
     val subtitles: List<Uri>,
     val cachedAtMs: Long,
+)
+
+private data class ScoredSubtitleCandidate(
+    val uri: Uri,
+    val score: Int,
+    val index: Int,
 )
 
 @get:UnstableApi
