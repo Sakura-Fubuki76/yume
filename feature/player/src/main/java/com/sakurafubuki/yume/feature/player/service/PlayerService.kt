@@ -11,6 +11,7 @@ import androidx.annotation.OptIn
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackParameters
@@ -32,8 +33,11 @@ import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.effect.GlEffect
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.DecoderReuseEvaluation
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime
 import androidx.media3.exoplayer.analytics.PlayerId
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.TrackGroupArray
@@ -206,6 +210,29 @@ class PlayerService : MediaSessionService() {
 
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var currentVolumeGain: Int = 0
+
+    @Volatile
+    private var hdrMaxLuma: Float? = null
+
+    private val hdrMetadataListener = object : AnalyticsListener {
+        override fun onVideoInputFormatChanged(eventTime: EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
+            val newMaxLuma = parseHdrMaxLuma(format.colorInfo?.hdrStaticInfo)
+            if (hdrMaxLuma != newMaxLuma) {
+                Logger.i(TAG, "HDR max_luma changed: $hdrMaxLuma → $newMaxLuma nits, rebuilding effects")
+                hdrMaxLuma = newMaxLuma
+                (mediaSession?.player as? ExoPlayer)?.applyVideoEffects(playerPreferences, newMaxLuma)
+            }
+        }
+    }
+
+    private fun parseHdrMaxLuma(hdrStaticInfo: ByteArray?): Float? {
+        if (hdrStaticInfo == null || hdrStaticInfo.size < 18) return null
+        val offset = if (hdrStaticInfo.size >= 25) 17 else 16
+        val lo = hdrStaticInfo[offset].toInt() and 0xFF
+        val hi = hdrStaticInfo[offset + 1].toInt() and 0xFF
+        val nits = ((hi shl 8) or lo).toFloat()
+        return if (nits > 0f) nits else null
+    }
 
     private val playbackStateListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
@@ -943,10 +970,11 @@ class PlayerService : MediaSessionService() {
             .setHandleAudioBecomingNoisy(playerPreferences.pauseOnHeadsetDisconnect)
             .build()
             .also { it ->
-                val effects = playerPreferences.buildVideoEffects()
+                val effects = playerPreferences.buildVideoEffects(hdrMaxLuma)
                 Logger.i(TAG, "Effect pipeline (${effects.size} active): ${effects.joinToString(" → ") { it::class.simpleName ?: "?" }}")
                 Logger.i(TAG, "DownscalePre=${playerPreferences.anime4KAutoDownscalePreMode} Upscale=${playerPreferences.anime4KUpscaleMode}")
                 it.setVideoEffects(effects)
+                it.addAnalyticsListener(hdrMetadataListener)
                 it.addListener(playbackStateListener)
                 it.pauseAtEndOfMediaItems = !playerPreferences.autoplay
                 it.repeatMode = when (playerPreferences.loopMode) {
@@ -960,7 +988,7 @@ class PlayerService : MediaSessionService() {
             preferencesRepository.playerPreferences
                 .distinctUntilChanged { old, new -> old.videoEffectsKey() == new.videoEffectsKey() }
                 .collect { preferences ->
-                    player.applyVideoEffects(preferences)
+                    player.applyVideoEffects(preferences, hdrMaxLuma)
                 }
         }
 
@@ -1008,6 +1036,7 @@ class PlayerService : MediaSessionService() {
         mediaSession?.run {
             player.clearMediaItems()
             player.stop()
+            (player as? ExoPlayer)?.removeAnalyticsListener(hdrMetadataListener)
             player.removeListener(playbackStateListener)
             player.release()
             release()
@@ -1792,21 +1821,21 @@ private var Player.playerSpecificSubtitleSpeed: Float
     }
 
 @OptIn(UnstableApi::class)
-private fun ExoPlayer.applyVideoEffects(preferences: PlayerPreferences) {
-    val effects = preferences.buildVideoEffects()
+private fun ExoPlayer.applyVideoEffects(preferences: PlayerPreferences, maxLuma: Float? = null) {
+    val effects = preferences.buildVideoEffects(maxLuma)
     Logger.i(TAG, "Effect pipeline (${effects.size} active): ${effects.joinToString(" -> ") { it::class.simpleName ?: "?" }}")
-    Logger.i(TAG, "DownscalePre=${preferences.anime4KAutoDownscalePreMode} Upscale=${preferences.anime4KUpscaleMode}")
+    Logger.i(TAG, "DownscalePre=${preferences.anime4KAutoDownscalePreMode} Upscale=${preferences.anime4KUpscaleMode} HdrMaxLuma=$maxLuma")
     setVideoEffects(effects)
 }
 
-private fun PlayerPreferences.buildVideoEffects(): List<GlEffect> = videoEffectsOrder.mapNotNull { type ->
+private fun PlayerPreferences.buildVideoEffects(maxLuma: Float?): List<GlEffect> = videoEffectsOrder.mapNotNull { type ->
     when (type) {
         VideoEffectType.AUTODOWNSCALEPRE -> null
         VideoEffectType.UPSCALE -> anime4KUpscaleMode.takeIf { it != Anime4KUpscaleMode.OFF }
             ?.let { Anime4KUpscaleEffect(it, anime4KAutoDownscalePreMode) }
         VideoEffectType.RESTORE -> anime4KRestoreMode.takeIf { it != Anime4KRestoreMode.OFF }
             ?.let { Anime4KRestoreEffect(it) }
-        VideoEffectType.DEBAND -> if (enableDeband) DebandEffect() else null
+        VideoEffectType.DEBAND -> if (enableDeband) DebandEffect(maxLuma = maxLuma) else null
         VideoEffectType.CLAMP_HIGHLIGHTS -> if (enableAnime4KClampHighlights) Anime4KClampHighlightsEffect() else null
         VideoEffectType.DITHER -> if (enableDither) DitherEffect() else null
     }

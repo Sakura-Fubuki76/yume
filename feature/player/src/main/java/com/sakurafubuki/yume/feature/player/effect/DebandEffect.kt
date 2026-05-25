@@ -7,13 +7,15 @@ import androidx.media3.effect.GlShaderProgram
 
 @UnstableApi
 class DebandEffect(
-    private val threshold: Float = 0.008f,
-    private val strength: Float = 0.004f,
-    private val radius: Int = 4,
+    private val maxLuma: Float? = null,
+    private val iterations: Int = 1,
+    private val threshold: Float = 3.0f,
+    private val radius: Float = 16.0f,
+    private val grain: Float = 4.0f,
 ) : GlEffect {
 
     @UnstableApi
-    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = BilateralDebandShaderProgram(useHdr, threshold, strength, radius)
+    override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram = LibplaceboDebandShaderProgram(useHdr, maxLuma, iterations, threshold, radius, grain)
 
     override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = false
 }
