@@ -10,10 +10,14 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.net.Uri
 import com.sakurafubuki.yume.core.common.Logger
+import com.sakurafubuki.yume.core.data.di.DefaultHttpClient
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -25,31 +29,42 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 
-object SpriteSheetGenerator {
+@Singleton
+class SpriteSheetGenerator @Inject constructor(
+    @DefaultHttpClient private val sharedOkHttpClient: OkHttpClient,
+) {
 
-    private const val TAG = "SpriteSheetGenerator"
+    companion object {
+        private const val TAG = "SpriteSheetGenerator"
 
-    const val THUMB_WIDTH = 160
+        const val THUMB_WIDTH = 160
 
-    const val THUMB_HEIGHT = 90
+        const val THUMB_HEIGHT = 90
 
-    const val COLS = 10
+        const val COLS = 10
 
-    const val ROWS = 10
+        const val ROWS = 10
 
-    const val FRAME_COUNT = COLS * ROWS
+        const val FRAME_COUNT = COLS * ROWS
 
-    private const val REMOTE_MAX_FRAMES = 100
+        private const val REMOTE_MAX_FRAMES = 100
 
-    private const val WEBP_QUALITY = 80
+        private const val WEBP_QUALITY = 80
 
-    private const val DECODE_TIMEOUT_MS = 3000L
+        private const val DECODE_TIMEOUT_MS = 3000L
 
-    private const val MAX_CONCURRENT_DOWNLOADS = 8
+        private const val MAX_CONCURRENT_DOWNLOADS = 8
 
-    private const val FRAME_CANDIDATE_RADIUS = 2
+        private const val FRAME_CANDIDATE_RADIUS = 2
 
-    private val decoderNameCache = ConcurrentHashMap<String, String>()
+        private const val MAX_DECODER_NAME_CACHE_ENTRIES = 16
+    }
+
+    private val decoderNameCache = Collections.synchronizedMap(
+        object : LinkedHashMap<String, String>(MAX_DECODER_NAME_CACHE_ENTRIES, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > MAX_DECODER_NAME_CACHE_ENTRIES
+        },
+    )
 
     private var nativeSolidColorCheckAvailable = true
 
@@ -158,7 +173,7 @@ object SpriteSheetGenerator {
         val metaFile = File(cacheDir, "$cacheKey.json")
 
         Logger.d("BUG4_SpriteSheet", "generateFromMoov: isLocal=$isLocal source=${source.take(100)} httpHeaders=$httpHeaders")
-        val okHttpClient = if (isLocal) OkHttpClient() else buildOkHttpClient(httpHeaders)
+        val okHttpClient = buildRequestClient(httpHeaders.takeUnless { isLocal })
         val mp4Extractor = Mp4KeyframeExtractor(okHttpClient)
 
         val parsed = if (isLocal) {
@@ -345,7 +360,7 @@ object SpriteSheetGenerator {
         val metaFile = File(cacheDir, "$cacheKey.json")
 
         Logger.d("BUG4_SpriteSheet", "generateFromMkv: source=${source.take(100)}")
-        val okHttpClient = buildOkHttpClient(httpHeaders)
+        val okHttpClient = buildRequestClient(httpHeaders)
         val mkvExtractor = MkvKeyframeExtractor(okHttpClient)
         val mp4Extractor = Mp4KeyframeExtractor(okHttpClient)
 
@@ -726,9 +741,7 @@ object SpriteSheetGenerator {
         }
     }
 
-    private fun buildOkHttpClient(httpHeaders: Map<String, String>?): OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+    private fun buildRequestClient(httpHeaders: Map<String, String>?): OkHttpClient = sharedOkHttpClient.newBuilder()
         .apply {
             if (httpHeaders != null) {
                 addInterceptor { chain ->

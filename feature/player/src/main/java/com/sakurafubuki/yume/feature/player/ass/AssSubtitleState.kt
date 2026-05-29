@@ -8,6 +8,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.net.toUri
@@ -15,10 +16,17 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.Player
 import com.jakewharton.disklrucache.DiskLruCache
 import com.sakurafubuki.yume.core.common.Logger
+import com.sakurafubuki.yume.core.data.di.DefaultHttpClient
 import com.sakurafubuki.yume.feature.player.extensions.getSubtitleAdjustedPositionMs
 import com.sakurafubuki.yume.feature.player.ui.SubtitleConfiguration
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import java.io.File
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.LinkedHashMap
 import kotlin.text.Charsets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -27,10 +35,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 
 private val FONT_EXTENSIONS = setOf("otf", "ttf", "ttc", "otc", "pfb", "pfa")
-private val httpClient = OkHttpClient()
 
 private const val ASS_CACHE_DIR = "ass_cache"
 private const val ASS_CACHE_MAX_BYTES = 50L * 1024 * 1024
+private const val ASS_DISCOVERY_CACHE_MAX_ENTRIES = 64
 
 @Volatile
 private var assDiskCache: DiskLruCache? = null
@@ -52,6 +60,13 @@ private fun assCacheKey(uri: String): String = MessageDigest.getInstance("SHA-25
     .take(16)
     .joinToString("") { "%02x".format(it) }
 
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface AssSubtitleNetworkEntryPoint {
+    @DefaultHttpClient
+    fun defaultHttpClient(): OkHttpClient
+}
+
 @Composable
 fun rememberAssSubtitleState(
     state: AssSubtitleState,
@@ -60,6 +75,11 @@ fun rememberAssSubtitleState(
     configuration: SubtitleConfiguration,
 ) {
     val context = LocalContext.current
+    val entryPoint = EntryPointAccessors.fromApplication(
+        context.applicationContext,
+        AssSubtitleNetworkEntryPoint::class.java,
+    )
+    val httpClient = remember { entryPoint.defaultHttpClient() }
 
     LaunchedEffect(Unit) {
         val configFile = File(context.cacheDir, "fonts.conf")
@@ -202,9 +222,19 @@ class AssSubtitleState {
         var embeddedTrackActive: Boolean = false
 
         val availableAssFilesByMediaId: MutableMap<String, List<android.net.Uri>> =
-            java.util.concurrent.ConcurrentHashMap()
+            Collections.synchronizedMap(
+                object : LinkedHashMap<String, List<android.net.Uri>>(ASS_DISCOVERY_CACHE_MAX_ENTRIES, 0.75f, true) {
+                    override fun removeEldestEntry(
+                        eldest: MutableMap.MutableEntry<String, List<android.net.Uri>>?,
+                    ): Boolean = size > ASS_DISCOVERY_CACHE_MAX_ENTRIES
+                },
+            )
         val autoSelectAssByMediaId: MutableMap<String, android.net.Uri> =
-            java.util.concurrent.ConcurrentHashMap()
+            Collections.synchronizedMap(
+                object : LinkedHashMap<String, android.net.Uri>(ASS_DISCOVERY_CACHE_MAX_ENTRIES, 0.75f, true) {
+                    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, android.net.Uri>?): Boolean = size > ASS_DISCOVERY_CACHE_MAX_ENTRIES
+                },
+            )
 
         @Synchronized
         fun getOrCreateHandle(): Long {

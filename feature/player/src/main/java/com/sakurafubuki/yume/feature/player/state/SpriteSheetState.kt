@@ -17,6 +17,10 @@ import com.sakurafubuki.yume.core.common.Utils
 import com.sakurafubuki.yume.core.data.repository.SpriteSheetCache
 import com.sakurafubuki.yume.core.data.repository.SpriteSheetGenerator
 import com.sakurafubuki.yume.core.model.WebDavServer
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 import java.io.File
 import java.security.MessageDigest
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +35,7 @@ class SpriteSheetState(
     private val context: Context,
     private val scope: CoroutineScope,
     private val webDavServersProvider: () -> Map<Int, WebDavServer>,
+    private val spriteSheetGenerator: SpriteSheetGenerator,
 ) {
 
     companion object {
@@ -90,7 +95,7 @@ class SpriteSheetState(
         isGenerating = true
         generationJob = scope.launch {
             try {
-                val result = SpriteSheetGenerator.generate(
+                val result = spriteSheetGenerator.generate(
                     source = source,
                     httpHeaders = httpHeaders,
                     durationMs = durationMs,
@@ -286,9 +291,23 @@ class SpriteSheetState(
     private fun defaultPort(scheme: String): Int = if (scheme.equals("https", ignoreCase = true)) 443 else 80
 }
 
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface SpriteSheetGeneratorEntryPoint {
+    fun spriteSheetGenerator(): SpriteSheetGenerator
+}
+
 @Composable
 fun rememberSpriteSheetState(
     context: Context,
     scope: CoroutineScope,
     webDavServersProvider: () -> Map<Int, WebDavServer>,
-): SpriteSheetState = remember { SpriteSheetState(context, scope, webDavServersProvider) }
+): SpriteSheetState {
+    val appContext = context.applicationContext
+    val entryPoint = EntryPointAccessors.fromApplication(
+        appContext,
+        SpriteSheetGeneratorEntryPoint::class.java,
+    )
+    val spriteSheetGenerator = entryPoint.spriteSheetGenerator()
+    return remember { SpriteSheetState(appContext, scope, webDavServersProvider, spriteSheetGenerator) }
+}

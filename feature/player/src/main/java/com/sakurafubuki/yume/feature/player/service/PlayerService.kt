@@ -63,6 +63,7 @@ import com.sakurafubuki.yume.core.common.extensions.getFilenameFromUri
 import com.sakurafubuki.yume.core.common.extensions.getLocalSubtitles
 import com.sakurafubuki.yume.core.common.extensions.getPath
 import com.sakurafubuki.yume.core.common.extensions.subtitleCacheDir
+import com.sakurafubuki.yume.core.data.di.StreamingHttpClient
 import com.sakurafubuki.yume.core.data.openlist.OpenListApi
 import com.sakurafubuki.yume.core.data.repository.CloudVideoMetadataRepository
 import com.sakurafubuki.yume.core.data.repository.MediaRepository
@@ -108,9 +109,9 @@ import com.sakurafubuki.yume.feature.player.extensions.uriToSubtitleConfiguratio
 import com.sakurafubuki.yume.feature.player.extensions.videoZoom
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
+import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -140,6 +141,7 @@ private const val STREAMING_CACHE_MAX_BYTES = 64L * 1024L * 1024L
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
+private const val SUBTITLE_DISCOVERY_CACHE_MAX_ENTRIES = 256
 private val SUBTITLE_EPISODE_REGEX = listOf(
     Regex("""(?i)(?:^|[\s._\-\[(])(?:ep?|episode)\s*0*(\d{1,4})(?=$|[\s._\-\]\)])"""),
     Regex("""(?:^|[\s._\-\[(第])0*(\d{1,4})(?:v\d+)?(?:话|話|集)?(?=$|[\s._\-\]\)])"""),
@@ -155,7 +157,13 @@ class PlayerService : MediaSessionService() {
     private var artworkLoadJob: Job? = null
     private var prebufferJob: Job? = null
     private val subtitleDiscoveryInFlight = ConcurrentHashMap.newKeySet<String>()
-    private val subtitleDiscoveryCompleted = ConcurrentHashMap.newKeySet<String>()
+    private val subtitleDiscoveryCompleted = Collections.newSetFromMap(
+        Collections.synchronizedMap(
+            object : LinkedHashMap<String, Boolean>(SUBTITLE_DISCOVERY_CACHE_MAX_ENTRIES, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?): Boolean = size > SUBTITLE_DISCOVERY_CACHE_MAX_ENTRIES
+            },
+        ),
+    )
 
     @Volatile
     private var prebufferKey: String? = null
@@ -201,7 +209,9 @@ class PlayerService : MediaSessionService() {
         ): Boolean = size > REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES
     }
 
-    private lateinit var okHttpClient: OkHttpClient
+    @Inject
+    @StreamingHttpClient
+    lateinit var okHttpClient: OkHttpClient
 
     private lateinit var mp4Extractor: Mp4KeyframeExtractor
     private lateinit var mkvExtractor: MkvKeyframeExtractor
@@ -857,11 +867,7 @@ class PlayerService : MediaSessionService() {
             )
         }
 
-        okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(60, TimeUnit.SECONDS)
-            .dispatcher(okhttp3.Dispatcher().apply { maxRequestsPerHost = 30 })
-            .connectionPool(okhttp3.ConnectionPool(25, 30, TimeUnit.MINUTES))
+        okHttpClient = okHttpClient.newBuilder()
             .addInterceptor { chain ->
                 val request = chain.request()
 
@@ -910,8 +916,6 @@ class PlayerService : MediaSessionService() {
                     .header("Authorization", authHeader)
                     .build()
             }
-            .followRedirects(true)
-            .followSslRedirects(true)
             .build()
 
         mp4Extractor = Mp4KeyframeExtractor(okHttpClient)
@@ -1031,6 +1035,8 @@ class PlayerService : MediaSessionService() {
         artworkLoadJob?.cancel()
         prebufferJob?.cancel()
         scrubPrefetchJob?.cancel()
+        subtitleDiscoveryInFlight.clear()
+        subtitleDiscoveryCompleted.clear()
         loudnessEnhancer?.release()
         loudnessEnhancer = null
         mediaSession?.run {
