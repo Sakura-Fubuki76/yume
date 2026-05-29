@@ -9,14 +9,12 @@ import java.io.InputStream
 import java.util.Date
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 class WebDavRepositoryImpl @Inject constructor(
     private val sardineFactory: SardineFactory,
 ) : WebDavRepository {
 
-    private val mutexByServer = java.util.concurrent.ConcurrentHashMap<Int, Mutex>()
     override suspend fun listDirectory(
         server: WebDavServer,
         path: String,
@@ -68,7 +66,7 @@ class WebDavRepositoryImpl @Inject constructor(
 
     private val sardineByServer = java.util.concurrent.ConcurrentHashMap<Int, Sardine>()
 
-    private fun getSardine(server: WebDavServer): Sardine = sardineByServer.getOrPut(server.id) {
+    private fun getSardine(server: WebDavServer): Sardine = sardineByServer.computeIfAbsent(server.id) {
         sardineFactory.create().apply {
             setCredentials(server.username, server.password, true)
         }

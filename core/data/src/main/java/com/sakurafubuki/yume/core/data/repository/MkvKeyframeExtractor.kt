@@ -3,6 +3,8 @@ package com.sakurafubuki.yume.core.data.repository
 import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.model.ChapterEntry
 import java.io.RandomAccessFile
+import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -16,7 +18,13 @@ import okhttp3.Request
 class MkvKeyframeExtractor(
     private val okHttpClient: OkHttpClient,
 ) {
-    private val cache = ConcurrentHashMap<String, Mp4KeyframeExtractor.ParsedMoov>()
+    private val cache = Collections.synchronizedMap(
+        object : LinkedHashMap<String, Mp4KeyframeExtractor.ParsedMoov>(MAX_PARSED_MKV_CACHE_ENTRIES, 0.75f, true) {
+            override fun removeEldestEntry(
+                eldest: MutableMap.MutableEntry<String, Mp4KeyframeExtractor.ParsedMoov>?,
+            ): Boolean = size > MAX_PARSED_MKV_CACHE_ENTRIES
+        },
+    )
     private val keyMutexes = ConcurrentHashMap<String, Mutex>()
 
     @Volatile
@@ -27,15 +35,19 @@ class MkvKeyframeExtractor(
 
         cache[cacheKey]?.let { return@withContext it }
 
-        val lock = keyMutexes.getOrPut(cacheKey) { Mutex() }
-        lock.withLock {
-            cache[cacheKey]?.let { return@withLock it }
+        val lock = keyMutexes.computeIfAbsent(cacheKey) { Mutex() }
+        try {
+            lock.withLock {
+                cache[cacheKey]?.let { return@withLock it }
 
-            val parsed = doLoadParsedMkv(url, cacheKey)
-            if (parsed != null) {
-                cache[cacheKey] = parsed
+                val parsed = doLoadParsedMkv(url, cacheKey)
+                if (parsed != null) {
+                    cache[cacheKey] = parsed
+                }
+                parsed
             }
-            parsed
+        } finally {
+            keyMutexes.remove(cacheKey, lock)
         }
     }
 
@@ -1125,6 +1137,7 @@ class MkvKeyframeExtractor(
 
     companion object {
         private const val BUG4_TAG = "BUG4_HttpExtractor"
+        private const val MAX_PARSED_MKV_CACHE_ENTRIES = 32
 
         private const val SEGMENT_ID = 0x18538067L
         private const val SEEK_HEAD_ID = 0x114D9B74L

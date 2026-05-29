@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
+import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
@@ -227,49 +228,53 @@ class Mp4KeyframeExtractor(
             return it
         }
 
-        val lock = moovLocks.getOrPut(cacheKey) { Mutex() }
-        return lock.withLock {
-            getCachedMoov(cacheKey)?.let {
-                log { "MOOV cache hit after wait: bytes=${it.moovByteSize} duration=${it.durationMs ?: 0}" }
-                return@withLock it
-            }
+        val lock = moovLocks.computeIfAbsent(cacheKey) { Mutex() }
+        return try {
+            lock.withLock {
+                getCachedMoov(cacheKey)?.let {
+                    log { "MOOV cache hit after wait: bytes=${it.moovByteSize} duration=${it.durationMs ?: 0}" }
+                    return@withLock it
+                }
 
-            val contentLength = httpHead(url)
-            Logger.d("BUG4_HttpExtractor", "loadParsedMoov: HEAD contentLength=$contentLength url=${cacheKey.take(80)}")
-            log { "HEAD contentLength=$contentLength url=$cacheKey" }
-            if (contentLength == null || contentLength < 1024) {
-                Logger.d("BUG4_HttpExtractor", "loadParsedMoov FAIL: no Content-Length for ${cacheKey.take(80)}")
-                log { "FAIL: HEAD returned no valid Content-Length" }
-                return@withLock null
-            }
+                val contentLength = httpHead(url)
+                Logger.d("BUG4_HttpExtractor", "loadParsedMoov: HEAD contentLength=$contentLength url=${cacheKey.take(80)}")
+                log { "HEAD contentLength=$contentLength url=$cacheKey" }
+                if (contentLength == null || contentLength < 1024) {
+                    Logger.d("BUG4_HttpExtractor", "loadParsedMoov FAIL: no Content-Length for ${cacheKey.take(80)}")
+                    log { "FAIL: HEAD returned no valid Content-Length" }
+                    return@withLock null
+                }
 
-            val moovData = downloadMoovAtom(url, contentLength)
-                ?: return@withLock null
-            val moovInfo = parseMoov(moovData)
-            val durationMs = parseMoovDurationMs(moovData) ?: moovInfo?.durationMs()
-            val parsed = ParsedMoov(
-                contentLength = contentLength,
-                moovByteSize = moovData.bytes.size,
-                moovInfo = moovInfo,
-                durationMs = durationMs,
-            )
-            putCachedMoov(cacheKey, parsed)
-
-            if (moovInfo != null && moovInfo.keyframes.isNotEmpty()) {
-                val chapters = extractChapters(moovData.bytes)
-                log { "MOOV extracted ${chapters.size} chapters for caching" }
-                MoovIndexCache.put(
-                    url,
-                    MoovIndexCache.Entry(
-                        keyframes = moovInfo.keyframes,
-                        contentLength = contentLength,
-                        durationMs = durationMs,
-                        chapters = chapters,
-                    ),
+                val moovData = downloadMoovAtom(url, contentLength)
+                    ?: return@withLock null
+                val moovInfo = parseMoov(moovData)
+                val durationMs = parseMoovDurationMs(moovData) ?: moovInfo?.durationMs()
+                val parsed = ParsedMoov(
+                    contentLength = contentLength,
+                    moovByteSize = moovData.bytes.size,
+                    moovInfo = moovInfo,
+                    durationMs = durationMs,
                 )
+                putCachedMoov(cacheKey, parsed)
+
+                if (moovInfo != null && moovInfo.keyframes.isNotEmpty()) {
+                    val chapters = extractChapters(moovData.bytes)
+                    log { "MOOV extracted ${chapters.size} chapters for caching" }
+                    MoovIndexCache.put(
+                        url,
+                        MoovIndexCache.Entry(
+                            keyframes = moovInfo.keyframes,
+                            contentLength = contentLength,
+                            durationMs = durationMs,
+                            chapters = chapters,
+                        ),
+                    )
+                }
+                log { "MOOV cache store: bytes=${parsed.moovByteSize} duration=${parsed.durationMs ?: 0}" }
+                parsed
             }
-            log { "MOOV cache store: bytes=${parsed.moovByteSize} duration=${parsed.durationMs ?: 0}" }
-            parsed
+        } finally {
+            moovLocks.remove(cacheKey, lock)
         }
     }
 
@@ -1355,7 +1360,11 @@ class Mp4KeyframeExtractor(
         return value
     }
 
-    private val decoderNameCache = ConcurrentHashMap<String, String>()
+    private val decoderNameCache = Collections.synchronizedMap(
+        object : LinkedHashMap<String, String>(MAX_DECODER_NAME_CACHE_ENTRIES, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > MAX_DECODER_NAME_CACHE_ENTRIES
+        },
+    )
 
     private fun findBestDecoderForMime(mime: String): String? {
         decoderNameCache[mime]?.let { return it }
@@ -1487,5 +1496,6 @@ class Mp4KeyframeExtractor(
 
     companion object {
         private const val MAX_MOOV_CACHE_ENTRIES = 32
+        private const val MAX_DECODER_NAME_CACHE_ENTRIES = 16
     }
 }
