@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.util.Consumer
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.Player
 import androidx.media3.common.listen
 import androidx.media3.common.util.UnstableApi
@@ -28,19 +29,24 @@ fun rememberRotationState(
     screenOrientation: ScreenOrientation,
 ): RotationState {
     val activity = LocalActivity.current as ComponentActivity
-    val rotationState = remember {
+    val rotationState = remember(activity, player, screenOrientation) {
         RotationState(
             activity = activity,
             player = player,
             screenOrientation = screenOrientation,
         )
     }
-    DisposableEffect(activity) {
+    DisposableEffect(activity, rotationState) {
         rotationState.handleListeners(this)
     }
-    LaunchedEffect(player) { rotationState.observe() }
+    LaunchedEffect(rotationState) { rotationState.observe() }
     return rotationState
 }
+
+private data class DisplayVideoSize(
+    val width: Float,
+    val height: Float,
+)
 
 @Stable
 class RotationState(
@@ -52,10 +58,11 @@ class RotationState(
         private set
 
     fun rotate() {
-        activity.requestedOrientation = when (activity.resources.configuration.orientation) {
+        val orientation = when (activity.resources.configuration.orientation) {
             Configuration.ORIENTATION_LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             else -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
+        requestOrientation(orientation)
     }
 
     fun handleListeners(disposableEffectScope: DisposableEffectScope): DisposableEffectResult = with(disposableEffectScope) {
@@ -84,44 +91,70 @@ class RotationState(
     private fun applyVideoOrientation() {
         if (screenOrientation != ScreenOrientation.VIDEO_ORIENTATION) return
         val orient = getVideoBasedOrientation()
-        activity.requestedOrientation = orient
+        requestOrientation(orient)
     }
 
     private fun setOrientation() {
-        val current = activity.requestedOrientation
-        if (current == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
-            val new = when (screenOrientation) {
-                ScreenOrientation.AUTOMATIC -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
-                ScreenOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                ScreenOrientation.LANDSCAPE_REVERSE -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
-                ScreenOrientation.LANDSCAPE_AUTO -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                ScreenOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                ScreenOrientation.VIDEO_ORIENTATION -> getVideoBasedOrientation()
-            }
-            activity.requestedOrientation = new
+        val orientation = when (screenOrientation) {
+            ScreenOrientation.AUTOMATIC -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            ScreenOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            ScreenOrientation.LANDSCAPE_REVERSE -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            ScreenOrientation.LANDSCAPE_AUTO -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            ScreenOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+            ScreenOrientation.VIDEO_ORIENTATION -> getVideoBasedOrientation()
         }
+        requestOrientation(orientation)
     }
 
     private fun getVideoBasedOrientation(): Int {
-        val (w, h) = getTrackVideoSize()
+        val (w, h) = getDisplayVideoSize()
         return when {
-            w == 0 || h == 0 -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            w <= 0f || h <= 0f -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             h > w -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
             else -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
     }
 
-    private fun getTrackVideoSize(): Pair<Int, Int> {
+    private fun requestOrientation(orientation: Int) {
+        activity.requestedOrientation = orientation
+        currentRequestedOrientation = orientation
+    }
+
+    private fun getDisplayVideoSize(): DisplayVideoSize {
+        val playerVideoSize = player.videoSize
+        if (playerVideoSize.width > 0 && playerVideoSize.height > 0) {
+            return DisplayVideoSize(
+                width = playerVideoSize.width * playerVideoSize.pixelWidthHeightRatio,
+                height = playerVideoSize.height.toFloat(),
+            )
+        }
+        return getTrackVideoSize()
+    }
+
+    private fun getTrackVideoSize(): DisplayVideoSize {
         val videoTrack = player.currentTracks.groups
-            .firstOrNull { it.type == C.TRACK_TYPE_VIDEO }
-            ?: return Pair(0, 0)
-        if (videoTrack.mediaTrackGroup.length == 0) return Pair(0, 0)
+            .firstOrNull { it.type == C.TRACK_TYPE_VIDEO && it.isSelected }
+            ?: player.currentTracks.groups.firstOrNull { it.type == C.TRACK_TYPE_VIDEO }
+            ?: return DisplayVideoSize(0f, 0f)
+        if (videoTrack.mediaTrackGroup.length == 0) return DisplayVideoSize(0f, 0f)
         val format = videoTrack.mediaTrackGroup.getFormat(0)
-        val rotated = format.rotationDegrees == 90 || format.rotationDegrees == 270
+        return format.toDisplayVideoSize()
+    }
+
+    private fun Format.toDisplayVideoSize(): DisplayVideoSize {
+        if (width <= 0 || height <= 0) return DisplayVideoSize(0f, 0f)
+        val rotated = rotationDegrees == 90 || rotationDegrees == 270
+        val pixelRatio = pixelWidthHeightRatio.takeIf { it > 0f } ?: 1f
         return if (rotated) {
-            Pair(format.height, format.width)
+            DisplayVideoSize(
+                width = height.toFloat(),
+                height = width * pixelRatio,
+            )
         } else {
-            Pair(format.width, format.height)
+            DisplayVideoSize(
+                width = width * pixelRatio,
+                height = height.toFloat(),
+            )
         }
     }
 }

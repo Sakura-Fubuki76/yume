@@ -14,6 +14,7 @@ import androidx.media3.common.listen
 import androidx.media3.common.util.UnstableApi
 import com.sakurafubuki.yume.feature.player.extensions.formatted
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -21,7 +22,7 @@ import kotlinx.coroutines.launch
 @UnstableApi
 @Composable
 fun rememberMediaPresentationState(player: Player): MediaPresentationState {
-    val mediaPresentationState = remember { MediaPresentationState(player) }
+    val mediaPresentationState = remember(player) { MediaPresentationState(player) }
     LaunchedEffect(player) { mediaPresentationState.observe() }
     return mediaPresentationState
 }
@@ -50,59 +51,82 @@ class MediaPresentationState(
         private set
 
     suspend fun observe() {
+        updateAll()
+
+        coroutineScope {
+            var progressTicker: Job? = null
+
+            fun stopProgressTicker() {
+                progressTicker?.cancel()
+                progressTicker = null
+                updatePosition()
+                updateBufferedPosition()
+            }
+
+            fun updateProgressTicker() {
+                if (!player.isPlaying) {
+                    stopProgressTicker()
+                    return
+                }
+                if (progressTicker?.isActive == true) return
+                progressTicker = launch {
+                    while (true) {
+                        updatePosition()
+                        updateBufferedPosition()
+                        delay(tickIntervalMs)
+                    }
+                }
+            }
+
+            updateProgressTicker()
+
+            player.listen { events ->
+                if (events.containsAny(
+                        Player.EVENT_MEDIA_ITEM_TRANSITION,
+                        Player.EVENT_TIMELINE_CHANGED,
+                        Player.EVENT_PLAYBACK_STATE_CHANGED,
+                    )
+                ) {
+                    updateDuration()
+                }
+
+                if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)) {
+                    this@MediaPresentationState.isBuffering = player.playbackState == Player.STATE_BUFFERING
+                }
+
+                if (events.contains(Player.EVENT_IS_PLAYING_CHANGED) ||
+                    events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)
+                ) {
+                    this@MediaPresentationState.isPlaying = player.isPlaying
+                    updateProgressTicker()
+                }
+
+                if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
+                    updatePosition()
+                }
+
+                if (events.containsAny(
+                        Player.EVENT_TIMELINE_CHANGED,
+                        Player.EVENT_PLAYBACK_STATE_CHANGED,
+                    )
+                ) {
+                    updateBufferedPosition()
+                }
+
+                if (events.containsAny(Player.EVENT_IS_LOADING_CHANGED)) {
+                    this@MediaPresentationState.isLoading = player.isLoading
+                }
+            }
+        }
+    }
+
+    private fun updateAll() {
         updatePosition()
         updateDuration()
         updateBufferedPosition()
         isPlaying = player.isPlaying
         isLoading = player.isLoading
         isBuffering = player.playbackState == Player.STATE_BUFFERING
-
-        coroutineScope {
-            launch {
-                player.listen { events ->
-                    if (events.containsAny(
-                            Player.EVENT_MEDIA_ITEM_TRANSITION,
-                            Player.EVENT_TIMELINE_CHANGED,
-                            Player.EVENT_PLAYBACK_STATE_CHANGED,
-                        )
-                    ) {
-                        updateDuration()
-                    }
-
-                    if (events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)) {
-                        this@MediaPresentationState.isBuffering = player.playbackState == Player.STATE_BUFFERING
-                    }
-
-                    if (events.contains(Player.EVENT_IS_PLAYING_CHANGED)) {
-                        this@MediaPresentationState.isPlaying = player.isPlaying
-                    }
-
-                    if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
-                        updatePosition()
-                    }
-
-                    if (events.containsAny(
-                            Player.EVENT_TIMELINE_CHANGED,
-                            Player.EVENT_PLAYBACK_STATE_CHANGED,
-                        )
-                    ) {
-                        updateBufferedPosition()
-                    }
-
-                    if (events.containsAny(Player.EVENT_IS_LOADING_CHANGED)) {
-                        this@MediaPresentationState.isLoading = player.isLoading
-                    }
-                }
-            }
-
-            while (true) {
-                delay(tickIntervalMs)
-                if (player.isPlaying) {
-                    updatePosition()
-                    updateBufferedPosition()
-                }
-            }
-        }
     }
 
     private fun updatePosition() {

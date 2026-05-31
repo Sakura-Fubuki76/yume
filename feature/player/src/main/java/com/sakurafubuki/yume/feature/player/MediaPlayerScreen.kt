@@ -70,8 +70,8 @@ import com.sakurafubuki.yume.feature.player.buttons.NextButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayPauseButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayerButton
 import com.sakurafubuki.yume.feature.player.buttons.PreviousButton
-import com.sakurafubuki.yume.feature.player.extensions.copy as copyMediaItem
 import com.sakurafubuki.yume.feature.player.extensions.DISABLED_SUBTITLE_SELECTION_URI
+import com.sakurafubuki.yume.feature.player.extensions.copy as copyMediaItem
 import com.sakurafubuki.yume.feature.player.extensions.isDisabledSubtitleSelection
 import com.sakurafubuki.yume.feature.player.extensions.nameRes
 import com.sakurafubuki.yume.feature.player.extensions.selectedSubtitleUri
