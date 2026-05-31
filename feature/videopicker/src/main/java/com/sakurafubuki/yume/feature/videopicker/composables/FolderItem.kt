@@ -120,19 +120,6 @@ private fun FolderListItem(
                         .width(min(90.dp, LocalConfiguration.current.screenWidthDp.dp * 0.3f))
                         .aspectRatio(20 / 17f),
                 )
-
-                if (preferences.showDurationField) {
-                    InfoChip(
-                        text = Utils.formatDurationMillis(folder.mediaDuration),
-                        modifier = Modifier
-                            .padding(5.dp)
-                            .padding(bottom = 3.dp)
-                            .align(Alignment.BottomEnd),
-                        backgroundColor = Color.Black.copy(alpha = 0.6f),
-                        contentColor = Color.White,
-                        shape = MaterialTheme.shapes.extraSmall,
-                    )
-                }
             }
         },
         content = {
@@ -177,6 +164,9 @@ private fun FolderListItem(
                             text = "$directFolderCount " +
                                 stringResource(id = R.string.folder.takeIf { directFolderCount == 1 } ?: R.string.folders),
                         )
+                    }
+                    if (preferences.showDurationField && folder.mediaDuration > 0) {
+                        InfoChip(text = Utils.formatDurationMillis(folder.mediaDuration))
                     }
                     if (preferences.showSizeField) {
                         InfoChip(text = Utils.formatFileSize(folder.mediaSize))
@@ -237,7 +227,7 @@ private fun FolderGridItem(
                             .aspectRatio(20 / 17f),
                     )
 
-                    if (preferences.showDurationField) {
+                    if (preferences.showDurationField && folder.mediaDuration > 0) {
                         InfoChip(
                             text = Utils.formatDurationMillis(folder.mediaDuration),
                             modifier = Modifier
