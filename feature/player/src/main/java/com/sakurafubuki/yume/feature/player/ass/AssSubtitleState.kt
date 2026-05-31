@@ -3,9 +3,11 @@ package com.sakurafubuki.yume.feature.player.ass
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.view.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -188,6 +190,26 @@ fun rememberAssSubtitleState(
         }
     }
 
+    val pausedRenderSignal by produceState(initialValue = 0, player) {
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (player.isPlaying) return
+                if (
+                    events.contains(Player.EVENT_POSITION_DISCONTINUITY) ||
+                    events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION) ||
+                    events.contains(Player.EVENT_TIMELINE_CHANGED) ||
+                    events.contains(Player.EVENT_PLAYBACK_STATE_CHANGED)
+                ) {
+                    value += 1
+                }
+            }
+        }
+        player.addListener(listener)
+        awaitDispose {
+            player.removeListener(listener)
+        }
+    }
+
     val embeddedActive by produceState(false) {
         while (true) {
             val active = AssSubtitleState.embeddedTrackActive
@@ -196,11 +218,20 @@ fun rememberAssSubtitleState(
         }
     }
 
-    LaunchedEffect(state.isLoaded, state.fontsReady, isPlaying, embeddedActive, state.loadGeneration) {
+    LaunchedEffect(
+        state.isLoaded,
+        state.fontsReady,
+        isPlaying,
+        embeddedActive,
+        state.loadGeneration,
+        state.renderInvalidation,
+        pausedRenderSignal,
+    ) {
         if ((!state.isLoaded && !embeddedActive) || !state.fontsReady) return@LaunchedEffect
 
         val capturedGen = state.loadGeneration
         state.renderFrame(player.getSubtitleAdjustedPositionMs())
+        if (!isPlaying) return@LaunchedEffect
 
         while (true) {
             if (state.loadGeneration != capturedGen) return@LaunchedEffect
@@ -265,11 +296,25 @@ class AssSubtitleState {
 
     val handle: Long = getOrCreateHandle()
 
+    var renderInvalidation by mutableIntStateOf(0)
+        private set
+
     @Volatile
     var loadGeneration: Int = 0
         private set
 
     private var safTreeUri: String? = null
+
+    private fun invalidateRender() {
+        renderInvalidation++
+    }
+
+    fun setSurface(surface: Surface?) {
+        if (handle != 0L) {
+            AssRenderer.nativeSetSurface(handle, surface)
+        }
+        invalidateRender()
+    }
 
     fun loadFontsFromSafTree(context: Context, safTreeUri: String) {
         if (handle == 0L) return
@@ -457,6 +502,7 @@ class AssSubtitleState {
         if (handle != 0L) {
             AssRenderer.nativeSetFrameSize(handle, width, height)
         }
+        invalidateRender()
     }
 
     fun loadTrack(bytes: ByteArray) {
@@ -481,6 +527,7 @@ class AssSubtitleState {
             configuration.showBackground,
             configuration.applyEmbeddedStyles,
         )
+        invalidateRender()
     }
 
     fun flushEvents() {

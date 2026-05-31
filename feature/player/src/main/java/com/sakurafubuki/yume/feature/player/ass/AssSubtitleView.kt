@@ -34,7 +34,7 @@ fun AssSubtitleView(
                 holder.addCallback(object : SurfaceHolder.Callback {
 
                     override fun surfaceCreated(holder: SurfaceHolder) {
-                        AssRenderer.nativeSetSurface(state.handle, holder.surface)
+                        state.setSurface(holder.surface)
                     }
 
                     override fun surfaceChanged(
@@ -43,12 +43,12 @@ fun AssSubtitleView(
                         width: Int,
                         height: Int,
                     ) {
-                        AssRenderer.nativeSetSurface(state.handle, holder.surface)
-                        AssRenderer.nativeSetFrameSize(state.handle, width, height)
+                        state.setSurface(holder.surface)
+                        state.setFrameSize(width, height)
                     }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) {
-                        AssRenderer.nativeSetSurface(state.handle, null)
+                        state.setSurface(null)
                     }
                 })
             }
