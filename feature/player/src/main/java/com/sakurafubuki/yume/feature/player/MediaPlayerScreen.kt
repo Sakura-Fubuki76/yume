@@ -71,6 +71,8 @@ import com.sakurafubuki.yume.feature.player.buttons.PlayPauseButton
 import com.sakurafubuki.yume.feature.player.buttons.PlayerButton
 import com.sakurafubuki.yume.feature.player.buttons.PreviousButton
 import com.sakurafubuki.yume.feature.player.extensions.copy as copyMediaItem
+import com.sakurafubuki.yume.feature.player.extensions.DISABLED_SUBTITLE_SELECTION_URI
+import com.sakurafubuki.yume.feature.player.extensions.isDisabledSubtitleSelection
 import com.sakurafubuki.yume.feature.player.extensions.nameRes
 import com.sakurafubuki.yume.feature.player.extensions.selectedSubtitleUri
 import com.sakurafubuki.yume.feature.player.state.ControlsVisibilityState
@@ -139,38 +141,56 @@ fun MediaPlayerScreen(
     player ?: return
     val metadataState = rememberMetadataState(player)
     var currentMediaId by remember(player) { mutableStateOf(player.currentMediaItem?.mediaId) }
+    var currentSelectedSubtitleUri by remember(player) {
+        mutableStateOf(player.currentMediaItem?.mediaMetadata?.selectedSubtitleUri)
+    }
     DisposableEffect(player) {
-        fun updateCurrentMediaId() {
-            currentMediaId = player.currentMediaItem?.mediaId
+        fun updateCurrentMediaItem() {
+            val currentItem = player.currentMediaItem
+            currentMediaId = currentItem?.mediaId
+            currentSelectedSubtitleUri = currentItem?.mediaMetadata?.selectedSubtitleUri
         }
         val listener = object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
                 currentMediaId = mediaItem?.mediaId
+                currentSelectedSubtitleUri = mediaItem?.mediaMetadata?.selectedSubtitleUri
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                updateCurrentMediaId()
+                updateCurrentMediaItem()
+            }
+
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (
+                    events.contains(Player.EVENT_MEDIA_METADATA_CHANGED) ||
+                    events.contains(Player.EVENT_TIMELINE_CHANGED) ||
+                    events.contains(Player.EVENT_MEDIA_ITEM_TRANSITION)
+                ) {
+                    updateCurrentMediaItem()
+                }
             }
         }
         player.addListener(listener)
-        updateCurrentMediaId()
+        updateCurrentMediaItem()
         onDispose {
             player.removeListener(listener)
         }
     }
-    LaunchedEffect(currentMediaId) {
+    LaunchedEffect(currentMediaId, currentSelectedSubtitleUri) {
         val mediaId = currentMediaId
-        selectedAssUri = null
-        if (mediaId.isNullOrBlank()) return@LaunchedEffect
-        player.currentMediaItem
-            ?.mediaMetadata
-            ?.selectedSubtitleUri
+        if (currentSelectedSubtitleUri.isDisabledSubtitleSelection()) {
+            selectedAssUri = null
+            return@LaunchedEffect
+        }
+        currentSelectedSubtitleUri
             ?.toUri()
             ?.takeIf { it.isAssSubtitleUri() }
             ?.let { persistedAssUri ->
                 selectedAssUri = persistedAssUri
                 return@LaunchedEffect
             }
+        selectedAssUri = null
+        if (mediaId.isNullOrBlank()) return@LaunchedEffect
         repeat(20) {
             val autoUri = AssSubtitleState.autoSelectAssByMediaId.remove(mediaId)
             if (autoUri != null) {
@@ -539,6 +559,23 @@ fun MediaPlayerScreen(
                                 selectedSubtitleUri = uri,
                             )
                         }
+                    }
+                },
+                onSubtitleDisabled = {
+                    selectedAssUri = null
+                    player.currentMediaItem?.let { currentMediaItem ->
+                        player.replaceMediaItem(
+                            player.currentMediaItemIndex,
+                            currentMediaItem.copyMediaItem(
+                                subtitleTrackIndex = -1,
+                                selectedSubtitleUri = DISABLED_SUBTITLE_SELECTION_URI,
+                            ),
+                        )
+                        viewModel.updateSelectedSubtitle(
+                            uri = currentMediaItem.mediaId,
+                            subtitleTrackIndex = -1,
+                            selectedSubtitleUri = DISABLED_SUBTITLE_SELECTION_URI.toUri(),
+                        )
                     }
                 },
                 selectedAssUri = selectedAssUri,

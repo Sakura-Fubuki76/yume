@@ -96,6 +96,7 @@ import com.sakurafubuki.yume.feature.player.extensions.applySubtitleTimingToRend
 import com.sakurafubuki.yume.feature.player.extensions.audioTrackIndex
 import com.sakurafubuki.yume.feature.player.extensions.copy
 import com.sakurafubuki.yume.feature.player.extensions.getManuallySelectedTrackIndex
+import com.sakurafubuki.yume.feature.player.extensions.isDisabledSubtitleSelection
 import com.sakurafubuki.yume.feature.player.extensions.playbackSpeed
 import com.sakurafubuki.yume.feature.player.extensions.positionMs
 import com.sakurafubuki.yume.feature.player.extensions.selectedSubtitleUri
@@ -332,18 +333,17 @@ class PlayerService : MediaSessionService() {
                     playerSpecificSubtitleSpeed = mediaMetadata.subtitleSpeed ?: 1f
                     applySubtitleTimingToRenderers()
                 }
-                if (!playerPreferences.rememberSelections) return
-                mediaSession?.player?.mediaMetadata?.audioTrackIndex?.let {
-                    mediaSession?.player?.switchTrack(C.TRACK_TYPE_AUDIO, it)
-                }
-                mediaSession?.player?.run {
-                    val selectedSubtitleUri = mediaMetadata.selectedSubtitleUri
-                    val selectedSubtitleTrackIndex = selectedSubtitleUri
-                        ?.let { findSubtitleTrackIndexByUri(it.toUri()) }
-                        ?: mediaMetadata.subtitleTrackIndex
-                    selectedSubtitleTrackIndex?.let {
-                        switchTrack(C.TRACK_TYPE_TEXT, it)
-                    }
+            }
+            if (tracks.groups.isNotEmpty()) {
+                mediaSession?.player?.applyRememberedTrackSelections()
+            }
+        }
+
+        override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+            super.onMediaMetadataChanged(mediaMetadata)
+            mediaSession?.player?.run {
+                if (currentTracks.groups.isNotEmpty()) {
+                    applyRememberedTrackSelections()
                 }
             }
         }
@@ -355,9 +355,14 @@ class PlayerService : MediaSessionService() {
 
             val audioTrackIndex = player.getManuallySelectedTrackIndex(C.TRACK_TYPE_AUDIO)
             val subtitleTrackIndex = player.getManuallySelectedTrackIndex(C.TRACK_TYPE_TEXT)
-            val selectedSubtitleUri = subtitleTrackIndex
-                ?.takeIf { it >= 0 }
-                ?.let { player.findSubtitleUriByTrackIndex(it) }
+            val currentSelectedSubtitleUri = currentMediaItem.mediaMetadata.selectedSubtitleUri?.toUri()
+            val selectedSubtitleUri = when {
+                subtitleTrackIndex == null -> null
+                subtitleTrackIndex >= 0 -> player.findSubtitleUriByTrackIndex(subtitleTrackIndex)
+                currentSelectedSubtitleUri?.isDisabledSubtitleSelection() == true -> currentSelectedSubtitleUri
+                currentSelectedSubtitleUri?.isAssSubtitleUri() == true -> currentSelectedSubtitleUri
+                else -> null
+            }
 
             if (audioTrackIndex != null) {
                 serviceScope.launch {
@@ -501,6 +506,26 @@ class PlayerService : MediaSessionService() {
             } catch (e: Exception) {
                 e.printStackTrace()
                 loudnessEnhancer = null
+            }
+        }
+    }
+
+    private fun Player.applyRememberedTrackSelections() {
+        if (!playerPreferences.rememberSelections) return
+
+        mediaMetadata.audioTrackIndex?.let { savedAudioTrackIndex ->
+            if (getManuallySelectedTrackIndex(C.TRACK_TYPE_AUDIO) != savedAudioTrackIndex) {
+                switchTrack(C.TRACK_TYPE_AUDIO, savedAudioTrackIndex)
+            }
+        }
+
+        val selectedSubtitleUri = mediaMetadata.selectedSubtitleUri
+        val selectedSubtitleTrackIndex = selectedSubtitleUri
+            ?.let { findSubtitleTrackIndexByUri(it.toUri()) }
+            ?: mediaMetadata.subtitleTrackIndex
+        selectedSubtitleTrackIndex?.let { savedSubtitleTrackIndex ->
+            if (getManuallySelectedTrackIndex(C.TRACK_TYPE_TEXT) != savedSubtitleTrackIndex) {
+                switchTrack(C.TRACK_TYPE_TEXT, savedSubtitleTrackIndex)
             }
         }
     }
@@ -1141,7 +1166,8 @@ class PlayerService : MediaSessionService() {
 
         val savedSubtitleTrackIndex = mediaItem.mediaMetadata.subtitleTrackIndex ?: videoState?.subtitleTrackIndex
         val savedSubtitleUri = mediaItem.mediaMetadata.selectedSubtitleUri?.toUri() ?: videoState?.selectedSubtitleUri
-        val hasPriorTrackSelection = savedSubtitleTrackIndex != null
+        val hasSavedSubtitleTrackSelection = savedSubtitleTrackIndex != null && savedSubtitleTrackIndex != -1
+        val hasDisabledSubtitleSelection = savedSubtitleUri?.isDisabledSubtitleSelection() == true
         val hasPriorSubConfigSelection = existingSubConfigurations.any {
             it.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0
         }
@@ -1150,9 +1176,9 @@ class PlayerService : MediaSessionService() {
         val savedCandidateUri = savedSubtitleUri?.let { savedUri ->
             allSubUris.firstOrNull { it.toString() == savedUri.toString() }
         }
-        val shouldAutoSelect = savedCandidateUri == null &&
-            savedSubtitleTrackIndex != -1 &&
-            !hasPriorTrackSelection &&
+        val shouldAutoSelect = !hasDisabledSubtitleSelection &&
+            savedCandidateUri == null &&
+            !hasSavedSubtitleTrackSelection &&
             !hasPriorSubConfigSelection &&
             playerPreferences.rememberSelections
         val bestCandidateUri = savedCandidateUri ?: if (shouldAutoSelect) {
@@ -1699,6 +1725,11 @@ class PlayerService : MediaSessionService() {
                 config.id == trackId || config.uri.toString() == trackId
             } ?: return null
         return (matchingConfig.id ?: matchingConfig.uri.toString()).toUri()
+    }
+
+    private fun Uri.isAssSubtitleUri(): Boolean {
+        val path = lastPathSegment ?: path ?: toString()
+        return path.endsWith(".ass", ignoreCase = true) || path.endsWith(".ssa", ignoreCase = true)
     }
 
     private fun buildAuthorizationHeader(url: HttpUrl): String? {

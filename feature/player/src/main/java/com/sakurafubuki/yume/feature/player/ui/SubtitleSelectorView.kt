@@ -59,6 +59,7 @@ fun BoxScope.SubtitleSelectorView(
     player: Player,
     onSelectSubtitleClick: () -> Unit,
     onAssTrackSelected: (uri: String) -> Unit = {},
+    onSubtitleDisabled: () -> Unit = {},
     selectedAssUri: android.net.Uri? = null,
     onEvent: (SubtitleOptionsEvent) -> Unit = {},
     onDismiss: () -> Unit,
@@ -113,7 +114,7 @@ fun BoxScope.SubtitleSelectorView(
                 text = stringResource(R.string.disable),
                 onClick = {
                     subtitleTracksState.switchTrack(-1)
-                    onAssTrackSelected("")
+                    onSubtitleDisabled()
                     onDismiss()
                 },
             )
