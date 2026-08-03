@@ -62,7 +62,7 @@ class SoundTouchAudioProcessor : AudioProcessor {
             C.ENCODING_PCM_16BIT,
         )
         pendingSoundTouchRecreation = true
-        return if (isActive) pendingOutputAudioFormat else AudioProcessor.AudioFormat.NOT_SET
+        return pendingOutputAudioFormat
     }
 
     override fun isActive(): Boolean = pendingOutputAudioFormat != AudioProcessor.AudioFormat.NOT_SET &&
@@ -70,13 +70,6 @@ class SoundTouchAudioProcessor : AudioProcessor {
 
     override fun queueInput(inputBuffer: ByteBuffer) {
         if (!inputBuffer.hasRemaining() || outputBuffer.hasRemaining()) return
-        if (!isActive) {
-            val passthrough = ByteBuffer.allocateDirect(inputBuffer.remaining()).order(ByteOrder.nativeOrder())
-            passthrough.put(inputBuffer)
-            passthrough.flip()
-            outputBuffer = passthrough
-            return
-        }
 
         val processor = ensureSoundTouch()
         val byteCount = inputBuffer.remaining()
@@ -89,32 +82,24 @@ class SoundTouchAudioProcessor : AudioProcessor {
         inputBuffer.position(inputBuffer.position() + sampleCount * BYTES_PER_SHORT)
         processor.putSamples(inputSamples, 0, frameCount)
         inputBytes += frameCount.toLong() * inputAudioFormat.bytesPerFrame
-        drainOutput()
     }
 
     override fun queueEndOfStream() {
+        if (inputEnded) return
         inputEnded = true
-        if (isActive) {
-            ensureSoundTouch().flush()
-            drainOutput()
-        }
+        soundTouch?.flush()
     }
 
     override fun getOutput(): ByteBuffer {
-        if (!outputBuffer.hasRemaining() && inputEnded) {
-            drainOutput()
-        }
+        drainOutput()
         val output = outputBuffer
         outputBuffer = AudioProcessor.EMPTY_BUFFER
         return output
     }
 
-    override fun isEnded(): Boolean {
-        if (inputEnded && !outputBuffer.hasRemaining()) {
-            drainOutput()
-        }
-        return inputEnded && !outputBuffer.hasRemaining() && (soundTouch?.numSamples() ?: 0L) == 0L
-    }
+    override fun isEnded(): Boolean = inputEnded &&
+        !outputBuffer.hasRemaining() &&
+        (soundTouch?.numSamples() ?: 0L) == 0L
 
     @Deprecated("Use flush(StreamMetadata) instead")
     override fun flush() {
@@ -129,13 +114,19 @@ class SoundTouchAudioProcessor : AudioProcessor {
         inputBytes = 0L
         outputBytes = 0L
         if (isActive) {
-            recreateSoundTouch()
+            if (soundTouch == null || pendingSoundTouchRecreation) {
+                recreateSoundTouch()
+            } else {
+                soundTouch?.clear()
+            }
         } else {
             releaseSoundTouch()
         }
     }
 
     override fun reset() {
+        speed = 1f
+        pitch = 1f
         outputBuffer = AudioProcessor.EMPTY_BUFFER
         inputEnded = false
         pendingInputAudioFormat = AudioProcessor.AudioFormat.NOT_SET
@@ -145,6 +136,7 @@ class SoundTouchAudioProcessor : AudioProcessor {
         inputBytes = 0L
         outputBytes = 0L
         releaseSoundTouch()
+        pendingSoundTouchRecreation = false
     }
 
     private fun ensureSoundTouch(): SoundTouch {
@@ -171,7 +163,7 @@ class SoundTouchAudioProcessor : AudioProcessor {
     }
 
     private fun drainOutput() {
-        if (!isActive || outputBuffer.hasRemaining()) return
+        if (outputBuffer.hasRemaining()) return
         val processor = soundTouch ?: return
         val availableFrames = processor.numSamples().coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         if (availableFrames <= 0) return
