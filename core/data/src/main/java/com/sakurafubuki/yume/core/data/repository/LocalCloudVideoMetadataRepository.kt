@@ -191,7 +191,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                         .filter { item ->
                             val cached = existing[item.href]
                             val hasValidThumbnail = cached?.thumbnailPath?.let { path ->
-                                path == item.apiThumbnailUrl || File(path).exists()
+                                !isRemoteHttpUrl(path) && File(path).exists()
                             } == true
                             cached == null || !hasValidThumbnail || cached.durationMs <= 0L
                         }
@@ -201,23 +201,39 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                     val extension = item.name.substringAfterLast('.', "")
                                     val rawUrl = item.rawVideoUrl
                                     Logger.d(TAG, "[API_THUMB] name=${item.name} rawUrl=${rawUrl?.take(100)}...")
-                                    val durationMs = if (rawUrl != null) {
+                                    val localThumbPath = item.apiThumbnailUrl?.let { url ->
+                                        downloadApiThumbnail(
+                                            imageUrl = url,
+                                            cacheKey = "${server.id}|${item.href}",
+                                            mediaName = item.name,
+                                        )
+                                    }
+                                    val fallbackMetadata = if (localThumbPath == null) {
+                                        Logger.w(TAG, "API thumbnail unavailable; using video keyframe fallback name=${item.name}")
+                                        try {
+                                            captureMetadata(server, item)
+                                        } catch (e: Exception) {
+                                            if (e is CancellationException) throw e
+                                            Logger.w(TAG, "API thumbnail fallback failed name=${item.name}", e)
+                                            CapturedMetadata(durationMs = 0L, thumbnailPath = null)
+                                        }
+                                    } else {
+                                        CapturedMetadata(durationMs = 0L, thumbnailPath = null)
+                                    }
+                                    val cachedDurationMs = existing[item.href]?.durationMs ?: 0L
+                                    val durationMs = if (localThumbPath != null && cachedDurationMs <= 0L && rawUrl != null) {
                                         probeVideoDurationMs(rawUrl, okHttpClient, extension, mp4KeyframeExtractor) ?: 0L
                                     } else {
-                                        0L
+                                        cachedDurationMs
                                     }
                                     Logger.d(TAG, "[API_THUMB] name=${item.name} durationMs=$durationMs")
-
-                                    val localThumbPath = item.apiThumbnailUrl?.let { url ->
-                                        downloadApiThumbnail(url, "${server.id}|${item.href}")
-                                    }
                                     WebDavVideoMetadataEntity(
                                         serverId = server.id,
                                         href = item.href,
-                                        durationMs = durationMs,
-                                        thumbnailPath = localThumbPath ?: item.apiThumbnailUrl,
-                                        width = item.width ?: 0,
-                                        height = item.height ?: 0,
+                                        durationMs = durationMs.takeIf { it > 0L } ?: fallbackMetadata.durationMs,
+                                        thumbnailPath = localThumbPath ?: fallbackMetadata.thumbnailPath,
+                                        width = item.width ?: fallbackMetadata.width ?: 0,
+                                        height = item.height ?: fallbackMetadata.height ?: 0,
                                         updatedAt = now,
                                     ).also { entity ->
                                         webDavVideoMetadataDao.upsertAll(listOf(entity))
@@ -240,7 +256,10 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                     val cached = existing[item.href]
                     val hasValidThumbnail = cached?.thumbnailPath?.let { File(it).exists() } ?: false
                     if (!hasValidThumbnail) {
-                        val expectedFile = existingThumbnailFile("${server.id}|${item.href}")
+                        val expectedFile = existingThumbnailFile(
+                            cacheKey = "${server.id}|${item.href}",
+                            mediaName = item.name,
+                        )
                         if (expectedFile.exists()) {
                             orphanRecoveries.add(
                                 WebDavVideoMetadataEntity(
@@ -524,7 +543,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
             }
             if (finalResult != null) {
                 val bitmap = finalResult.bitmap
-                val thumbnailPath = saveFirstFrame(server.id, item.href, bitmap)
+                val thumbnailPath = saveFirstFrame(server.id, item.href, item.name, bitmap)
                 bitmap.recycle()
                 if (!thumbnailPath.isNullOrBlank()) {
                     val elapsed = System.currentTimeMillis() - binaryStartMs
@@ -629,7 +648,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         }
 
         if (nativeResult != null && nativeResult.thumbnail != null) {
-            val thumbnailPath = saveFirstFrame(server.id, item.href, nativeResult.thumbnail)
+            val thumbnailPath = saveFirstFrame(server.id, item.href, item.name, nativeResult.thumbnail)
             return CapturedMetadata(durationMs = nativeResult.durationMs, thumbnailPath = thumbnailPath, width = nativeResult.width, height = nativeResult.height)
         }
 
@@ -661,7 +680,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         }
 
         val durationMs = nativeDurationMs
-        val thumbnailPath = ffmpegThumbnail?.let { saveFirstFrame(server.id, item.href, it) }
+        val thumbnailPath = ffmpegThumbnail?.let { saveFirstFrame(server.id, item.href, item.name, it) }
         return CapturedMetadata(durationMs = durationMs, thumbnailPath = thumbnailPath, width = nativeResult?.width, height = nativeResult?.height)
     }
 
@@ -821,9 +840,18 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         }
     }
 
-    private fun saveFirstFrame(serverId: Int, href: String, frame: Bitmap): String? = saveThumbnailBitmap("$serverId|$href", frame)
+    private fun saveFirstFrame(
+        serverId: Int,
+        href: String,
+        mediaName: String,
+        frame: Bitmap,
+    ): String? = saveThumbnailBitmap("$serverId|$href", mediaName, frame)
 
-    private fun saveThumbnailBitmap(cacheKey: String, frame: Bitmap): String? = runCatching {
+    private fun saveThumbnailBitmap(
+        cacheKey: String,
+        mediaName: String,
+        frame: Bitmap,
+    ): String? = runCatching {
         val resized = try {
             resizeIfNeeded(frame, MAX_EDGE)
         } catch (_: OutOfMemoryError) {
@@ -834,7 +862,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
             frame.recycle()
         }
         try {
-            val outputFile = thumbnailFile(cacheKey)
+            val outputFile = thumbnailFile(cacheKey, mediaName)
             FileOutputStream(outputFile).use { output ->
                 resized.compress(Bitmap.CompressFormat.WEBP_LOSSY, WEBP_QUALITY, output)
             }
@@ -847,36 +875,73 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
 
     private fun cloudThumbnailCacheDir(): File = File(context.cacheDir, CLOUD_THUMBNAILS_DIR).apply { mkdirs() }
 
-    private fun thumbnailFile(cacheKey: String, extension: String = THUMBNAIL_EXTENSION): File = File(cloudThumbnailCacheDir(), "${sha256(cacheKey)}.$extension")
+    private fun thumbnailFile(
+        cacheKey: String,
+        mediaName: String,
+        extension: String = THUMBNAIL_EXTENSION,
+    ): File = File(
+        cloudThumbnailCacheDir(),
+        "${thumbnailBaseName(mediaName)}_${sha256(cacheKey).take(THUMBNAIL_HASH_LENGTH)}.$extension",
+    )
 
-    private fun existingThumbnailFile(cacheKey: String): File {
-        val webpFile = thumbnailFile(cacheKey)
+    private fun legacyThumbnailFile(cacheKey: String, extension: String): File = File(cloudThumbnailCacheDir(), "${sha256(cacheKey)}.$extension")
+
+    private fun existingThumbnailFile(cacheKey: String, mediaName: String): File {
+        val webpFile = thumbnailFile(cacheKey, mediaName)
         if (webpFile.exists()) return webpFile
-        val legacyFile = thumbnailFile(cacheKey, LEGACY_THUMBNAIL_EXTENSION)
-        return legacyFile.takeIf { it.exists() } ?: webpFile
+        val legacyHashedWebp = legacyThumbnailFile(cacheKey, THUMBNAIL_EXTENSION)
+        if (legacyHashedWebp.exists()) return legacyHashedWebp
+        val namedJpegFile = thumbnailFile(cacheKey, mediaName, LEGACY_THUMBNAIL_EXTENSION)
+        if (namedJpegFile.exists()) return namedJpegFile
+        val legacyHashedJpeg = legacyThumbnailFile(cacheKey, LEGACY_THUMBNAIL_EXTENSION)
+        return legacyHashedJpeg.takeIf { it.exists() } ?: webpFile
     }
 
-    private fun downloadApiThumbnail(imageUrl: String, cacheKey: String): String? = runCatching {
-        val outputFile = thumbnailFile(cacheKey)
+    private fun downloadApiThumbnail(
+        imageUrl: String,
+        cacheKey: String,
+        mediaName: String,
+    ): String? = runCatching {
+        val outputFile = thumbnailFile(cacheKey, mediaName)
         if (outputFile.exists()) return outputFile.absolutePath
 
-        val legacyFile = thumbnailFile(cacheKey, LEGACY_THUMBNAIL_EXTENSION)
+        val legacyFile = existingThumbnailFile(cacheKey, mediaName)
         if (legacyFile.exists()) {
             BitmapFactory.decodeFile(legacyFile.absolutePath)?.let { legacyBitmap ->
-                saveThumbnailBitmap(cacheKey, legacyBitmap)?.let { return it }
+                saveThumbnailBitmap(cacheKey, mediaName, legacyBitmap)?.let { return it }
             }
         }
 
         val request = Request.Builder().url(imageUrl).build()
         okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val body = response.body ?: return null
+            if (!response.isSuccessful) {
+                Logger.w(TAG, "API thumbnail HTTP ${response.code} name=$mediaName")
+                return null
+            }
+            val body = response.body ?: run {
+                Logger.w(TAG, "API thumbnail empty response name=$mediaName")
+                return null
+            }
             val bytes = body.bytes()
-            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
-            saveThumbnailBitmap(cacheKey, bitmap)?.let { return it }
+            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: run {
+                Logger.w(TAG, "API thumbnail decode failed name=$mediaName contentType=${body.contentType()}")
+                return null
+            }
+            saveThumbnailBitmap(cacheKey, mediaName, bitmap)?.let { return it }
         }
         null
+    }.onFailure { error ->
+        Logger.w(TAG, "API thumbnail request failed name=$mediaName error=${error.message}", error)
     }.getOrNull()
+
+    private fun thumbnailBaseName(mediaName: String): String {
+        val nameWithoutExtension = mediaName.substringBeforeLast('.', mediaName)
+        return nameWithoutExtension
+            .replace(INVALID_FILENAME_CHARS, "_")
+            .trim(' ', '.')
+            .take(MAX_THUMBNAIL_BASENAME_LENGTH)
+            .ifBlank { DEFAULT_THUMBNAIL_BASENAME }
+    }
 
     private fun resizeIfNeeded(source: Bitmap, maxEdge: Int): Bitmap {
         val srcWidth = source.width
@@ -934,8 +999,12 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         private const val THUMBNAIL_EXTENSION = "webp"
         private const val LEGACY_THUMBNAIL_EXTENSION = "jpg"
         private const val WEBP_QUALITY = 84
+        private const val THUMBNAIL_HASH_LENGTH = 12
+        private const val MAX_THUMBNAIL_BASENAME_LENGTH = 80
+        private const val DEFAULT_THUMBNAIL_BASENAME = "video"
         private const val METADATA_RETRY_BACKOFF_MS = 3 * 60 * 1000L
         private val BINARY_MP4_EXTENSIONS = setOf("mp4", "mov", "m4v")
+        private val INVALID_FILENAME_CHARS = Regex("[<>:\"/\\\\|?*\\u0000-\\u001F]")
 
         private fun isRemoteHttpUrl(url: String): Boolean = url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)
 
