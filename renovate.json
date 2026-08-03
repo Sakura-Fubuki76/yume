@@ -2,5 +2,38 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended"
+  ],
+  "dependencyDashboard": true,
+  "internalChecksFilter": "strict",
+  "prCreation": "not-pending",
+  "automergeType": "pr",
+  "automergeStrategy": "squash",
+  "platformAutomerge": false,
+  "ignoreTests": false,
+  "rebaseWhen": "behind-base-branch",
+  "packageRules": [
+    {
+      "description": "Automerge stable dependency updates after CI passes",
+      "matchUpdateTypes": [
+        "minor",
+        "pin",
+        "digest",
+        "patch"
+      ],
+      "minimumReleaseAge": "3 days",
+      "automerge": true
+    },
+    {
+      "description": "Require manual review for major updates",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false
+    },
+    {
+      "description": "Require manual review for unstable and zero-major dependencies",
+      "matchCurrentVersion": "/^(0\\.|.*-)/",
+      "automerge": false
+    }
   ]
 }
