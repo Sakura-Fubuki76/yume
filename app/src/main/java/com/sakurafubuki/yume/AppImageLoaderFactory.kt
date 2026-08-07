@@ -1,7 +1,6 @@
 package com.sakurafubuki.yume
 
 import android.content.Context
-import android.net.Uri
 import coil3.ImageLoader
 import coil3.disk.DiskCache
 import coil3.disk.directory
@@ -85,24 +84,10 @@ class AppImageLoaderFactory @Inject constructor(
     @Volatile
     private var webDavServersById: Map<Int, WebDavServer> = emptyMap()
 
-    @Volatile
-    private var serverIndex: Map<String, List<WebDavServer>> = emptyMap()
-
     init {
         applicationScope.launch(Dispatchers.IO) {
             webDavServerRepository.observeServers().collect { servers ->
                 webDavServersById = servers.associateBy { it.id }
-                serverIndex = servers.groupBy { server ->
-                    val uri = Uri.parse(server.url)
-                    val port = if (uri.port != -1) {
-                        uri.port
-                    } else if (uri.scheme.equals("https", ignoreCase = true)) {
-                        443
-                    } else {
-                        80
-                    }
-                    "${uri.scheme}://${uri.host}:$port"
-                }
             }
         }
     }
@@ -249,28 +234,7 @@ class AppImageLoaderFactory @Inject constructor(
 
     private fun isOpenListSignedResource(url: HttpUrl): Boolean = url.queryParameter("sign") != null
 
-    private fun findMatchingWebDavServer(url: HttpUrl): WebDavServer? {
-        val port = if (url.port != -1) url.port else defaultPort(url.scheme)
-        val key = "${url.scheme}://${url.host}:$port"
-        val candidates = serverIndex[key] ?: return null
-        if (candidates.isEmpty()) return null
-        if (candidates.size == 1 && candidates[0].basePath.isBlank()) return candidates[0]
-
-        val normalizedPath = normalizePath(url.encodedPath)
-        return candidates
-            .asSequence()
-            .filter { normalizedPath.startsWith(normalizePath(it.basePath)) }
-            .maxByOrNull { normalizePath(it.basePath).length }
-    }
-
-    private fun normalizePath(path: String): String {
-        val trimmed = path.trim()
-        if (trimmed.isEmpty()) return "/"
-        val withLeadingSlash = if (trimmed.startsWith('/')) trimmed else "/$trimmed"
-        return withLeadingSlash.removeSuffix("/").ifBlank { "/" }
-    }
-
-    private fun defaultPort(scheme: String): Int = if (scheme.equals("https", ignoreCase = true)) 443 else 80
+    private fun findMatchingWebDavServer(url: HttpUrl): WebDavServer? = com.sakurafubuki.yume.core.data.webdav.findMatchingWebDavServer(webDavServersById.values, url)
 
     private fun buildAuthorizationHeader(username: String, password: String): String? {
         val normalizedUsername = username.trim()

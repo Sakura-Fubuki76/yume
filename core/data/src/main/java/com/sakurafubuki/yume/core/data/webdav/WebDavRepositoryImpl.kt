@@ -64,20 +64,32 @@ class WebDavRepositoryImpl @Inject constructor(
         Unit
     }
 
-    private val sardineByServer = java.util.concurrent.ConcurrentHashMap<Int, Sardine>()
+    private data class SardineEntry(
+        val fingerprint: String,
+        val sardine: Sardine,
+    )
 
-    private fun getSardine(server: WebDavServer): Sardine = sardineByServer.computeIfAbsent(server.id) {
-        sardineFactory.create().apply {
-            setCredentials(server.username, server.password, true)
+    private val sardineByServer = java.util.concurrent.ConcurrentHashMap<Int, SardineEntry>()
+
+    private fun serverFingerprint(server: WebDavServer): String = "${server.url}|${server.username}|${server.password}"
+
+    private fun getSardine(server: WebDavServer): Sardine {
+        val fingerprint = serverFingerprint(server)
+        // 凭据（URL/用户名/密码）变化时旧 client 会持续 401，此处按指纹自动重建。
+        sardineByServer[server.id]?.let { entry ->
+            if (entry.fingerprint == fingerprint) return entry.sardine
+            sardineByServer.remove(server.id)
         }
+        return sardineByServer.computeIfAbsent(server.id) {
+            val sardine = sardineFactory.create().apply {
+                setCredentials(server.username, server.password, true)
+            }
+            SardineEntry(fingerprint, sardine)
+        }.sardine
     }
 
     private suspend fun <T> withSardine(server: WebDavServer, block: Sardine.() -> T): T = withContext(Dispatchers.IO) {
         getSardine(server).block()
-    }
-
-    fun onServerRemoved(serverId: Int) {
-        sardineByServer.remove(serverId)
     }
 
     override fun getStreamUrl(item: WebDavMediaItem, server: WebDavServer): String {
