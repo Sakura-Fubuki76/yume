@@ -404,6 +404,7 @@
     <string name="image_browser_preload_page_count">预加载页数</string>
     <string name="image_browser_preload_page_count_desc">预加载 %1$d 页</string>
     <string name="streaming_buffer">流媒体缓冲</string>
+    <string name="streaming_cache_size">流媒体磁盘缓存</string>
     <string name="streaming_min_buffer">最小缓冲</string>
     <string name="streaming_max_buffer">最大缓冲</string>
     <string name="streaming_buffer_for_playback">初始播放缓冲</string>

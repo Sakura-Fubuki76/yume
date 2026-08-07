@@ -394,6 +394,7 @@
     <string name="enable_cloud_image_cache_desc">Cache images loaded from WebDAV and image hosting services on disk</string>
 
     <string name="streaming_buffer">Streaming buffer</string>
+    <string name="streaming_cache_size">Streaming disk cache</string>
     <string name="streaming_min_buffer">Minimum buffer</string>
     <string name="streaming_max_buffer">Maximum buffer</string>
     <string name="streaming_buffer_for_playback">Buffer for initial playback</string>

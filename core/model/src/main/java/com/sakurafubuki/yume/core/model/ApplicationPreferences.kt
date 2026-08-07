@@ -41,6 +41,7 @@ data class ApplicationPreferences(
     val streamingBufferForPlaybackMs: Int = DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_MS,
     val streamingBufferForPlaybackAfterRebufferMs: Int = DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
     val streamingAllocatorChunkSizeKb: Int = DEFAULT_STREAMING_ALLOCATOR_CHUNK_SIZE_KB,
+    val streamingCacheSizeMb: Int = DEFAULT_STREAMING_CACHE_SIZE_MB,
     val imageQuality: ImageQuality = ImageQuality.HIGH,
     val imageBrowserMemoryCachePercent: Int = DEFAULT_IMAGE_BROWSER_MEMORY_CACHE_PERCENT,
     val imageBrowserThumbnailSizePx: Int = DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX,
@@ -69,6 +70,9 @@ data class ApplicationPreferences(
         const val DEFAULT_STREAMING_ALLOCATOR_CHUNK_SIZE_KB = 2048
         const val MIN_STREAMING_ALLOCATOR_CHUNK_SIZE_KB = 64
         const val MAX_STREAMING_ALLOCATOR_CHUNK_SIZE_KB = 8192
+        const val DEFAULT_STREAMING_CACHE_SIZE_MB = 4096
+        const val MIN_STREAMING_CACHE_SIZE_MB = 0
+        const val MAX_STREAMING_CACHE_SIZE_MB = 10240
         const val DEFAULT_IMAGE_BROWSER_MEMORY_CACHE_PERCENT = 25
         const val IMAGE_BROWSER_THUMBNAIL_SIZE_ORIGINAL = 0
         const val DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX = 512

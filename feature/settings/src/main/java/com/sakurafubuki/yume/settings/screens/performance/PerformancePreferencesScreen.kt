@@ -104,6 +104,7 @@ private fun PerformancePreferencesContent(
             val streamingMaxBufferTitle = stringResource(R.string.streaming_max_buffer)
             val streamingBufferForPlaybackTitle = stringResource(R.string.streaming_buffer_for_playback)
             val streamingBufferAfterRebufferTitle = stringResource(R.string.streaming_buffer_after_rebuffer)
+            val streamingCacheSizeTitle = stringResource(R.string.streaming_cache_size)
             val imageCacheWarning = uiState.imageCacheSizeMb > 0 &&
                 uiState.currentImageCacheUsageMb * 10 >= uiState.imageCacheSizeMb * 9L
             ListSectionTitle(text = stringResource(id = R.string.image_browsing_experience))
@@ -228,6 +229,42 @@ private fun PerformancePreferencesContent(
             ListSectionTitle(text = stringResource(id = R.string.streaming_buffer))
             Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                 PreferenceSlider(
+                    title = streamingCacheSizeTitle,
+                    description = stringResource(R.string.cache_size_gb, uiState.streamingCacheSizeMb / 1024),
+                    icon = NextIcons.Download,
+                    value = uiState.streamingCacheSizeMb.toFloat(),
+                    valueRange = ApplicationPreferences.MIN_STREAMING_CACHE_SIZE_MB.toFloat()..ApplicationPreferences.MAX_STREAMING_CACHE_SIZE_MB.toFloat(),
+                    steps = discreteSliderSteps(
+                        minValue = ApplicationPreferences.MIN_STREAMING_CACHE_SIZE_MB,
+                        maxValue = ApplicationPreferences.MAX_STREAMING_CACHE_SIZE_MB,
+                        stepSize = DISK_CACHE_STEP_MB,
+                    ),
+                    onValueChange = {
+                        onEvent(
+                            MediaLibraryPreferencesUiEvent.UpdateStreamingCacheSize(
+                                snapSliderValue(
+                                    value = it,
+                                    minValue = ApplicationPreferences.MIN_STREAMING_CACHE_SIZE_MB,
+                                    maxValue = ApplicationPreferences.MAX_STREAMING_CACHE_SIZE_MB,
+                                    stepSize = DISK_CACHE_STEP_MB,
+                                ),
+                            ),
+                        )
+                    },
+                    onClick = {
+                        pendingCustomValueInput = CustomValueInputDialogState(
+                            title = streamingCacheSizeTitle,
+                            initialValue = uiState.streamingCacheSizeMb,
+                            minValue = ApplicationPreferences.MIN_STREAMING_CACHE_SIZE_MB,
+                            maxValue = ApplicationPreferences.MAX_STREAMING_CACHE_SIZE_MB,
+                            stepSize = DISK_CACHE_STEP_MB,
+                            onConfirm = { onEvent(MediaLibraryPreferencesUiEvent.UpdateStreamingCacheSize(it)) },
+                        )
+                    },
+                    isFirstItem = true,
+                    isLastItem = false,
+                )
+                PreferenceSlider(
                     title = streamingMinBufferTitle,
                     description = stringResource(R.string.buffer_ms_value, uiState.streamingMinBufferMs),
                     icon = NextIcons.Fast,
@@ -260,7 +297,7 @@ private fun PerformancePreferencesContent(
                             onConfirm = { onEvent(MediaLibraryPreferencesUiEvent.UpdateStreamingMinBufferMs(it)) },
                         )
                     },
-                    isFirstItem = true,
+                    isFirstItem = false,
                     isLastItem = false,
                 )
                 PreferenceSlider(

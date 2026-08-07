@@ -138,7 +138,6 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 private const val TAG = "PlayerService"
 private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
 private const val STREAMING_CACHE_DIR = "streaming_media"
-private const val STREAMING_CACHE_MAX_BYTES = 64L * 1024L * 1024L
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
@@ -953,7 +952,7 @@ class PlayerService : MediaSessionService() {
         }
 
         val upstreamFactory = OkHttpDataSource.Factory(okHttpClient)
-        val streamingCache = createStreamingCache()
+        val streamingCache = createStreamingCache(appPreferences.streamingCacheSizeMb)
         this.streamingCache = streamingCache
         val prefetchCacheDataSourceFactory = streamingCache?.let { cache ->
             CacheDataSource.Factory()
@@ -1676,15 +1675,18 @@ class PlayerService : MediaSessionService() {
         .build()
         .toString()
 
-    private fun createStreamingCache(): SimpleCache? = runCatching {
-        SimpleCache(
-            File(cacheDir, STREAMING_CACHE_DIR),
-            LeastRecentlyUsedCacheEvictor(STREAMING_CACHE_MAX_BYTES),
-            StandaloneDatabaseProvider(applicationContext),
-        )
-    }.onFailure { error ->
-        Logger.w(TAG, "Failed to create streaming cache", error)
-    }.getOrNull()
+    private fun createStreamingCache(cacheSizeMb: Int): SimpleCache? {
+        if (cacheSizeMb <= 0) return null
+        return runCatching {
+            SimpleCache(
+                File(cacheDir, STREAMING_CACHE_DIR),
+                LeastRecentlyUsedCacheEvictor(cacheSizeMb.toLong() * 1024L * 1024L),
+                StandaloneDatabaseProvider(applicationContext),
+            )
+        }.onFailure { error ->
+            Logger.w(TAG, "Failed to create streaming cache", error)
+        }.getOrNull()
+    }
 
     private fun Request.withStreamingNetworkHeaders(): Request {
         var builder = newBuilder()
