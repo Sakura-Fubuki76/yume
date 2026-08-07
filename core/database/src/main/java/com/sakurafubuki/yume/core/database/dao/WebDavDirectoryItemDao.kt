@@ -14,6 +14,9 @@ interface WebDavDirectoryItemDao {
     @Query("SELECT * FROM webdav_directory_items WHERE server_id = :serverId AND parent_path = :parentPath ORDER BY is_directory DESC, name COLLATE NOCASE ASC")
     suspend fun getByParent(serverId: Int, parentPath: String): List<WebDavDirectoryItemEntity>
 
+    @Query("SELECT MAX(updated_at) FROM webdav_directory_items WHERE server_id = :serverId AND parent_path = :parentPath")
+    suspend fun getLastUpdatedAt(serverId: Int, parentPath: String): Long?
+
     @Query("SELECT * FROM webdav_directory_items WHERE server_id = :serverId AND parent_path = :parentPath ORDER BY is_directory DESC, name COLLATE NOCASE ASC")
     fun observeByParent(serverId: Int, parentPath: String): Flow<List<WebDavDirectoryItemEntity>>
 

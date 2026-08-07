@@ -507,6 +507,17 @@ class MediaPickerViewModel @Inject constructor(
                 }
             }
 
+            // 目录缓存新鲜时跳过网络请求，直接展示缓存内容。
+            if (!refreshing &&
+                cachedItems != null &&
+                cloudDirectoryItemCache.isFresh(server.id, path, CLOUD_DIRECTORY_CACHE_TTL_MS)
+            ) {
+                Logger.d(CLOUD_LOG_TAG, "loadCloudDirectory: cache fresh, skip network for server=${server.id} path=$path")
+                uiStateInternal.update { it.copy(cloudRefreshing = false) }
+                cloudLoadJob = null
+                return@launch
+            }
+
             runCatching { listCloudDirectory(server, path, refreshing = refreshing).first }
                 .onSuccess { items ->
                     webDavVideoDirectoryCache.put(server.id, path, items)
@@ -1802,6 +1813,7 @@ private const val CLOUD_LOG_TAG = "CloudMediaPicker"
 private const val CLOUD_FLOW_LOG_TAG = "CloudFolderFlow"
 private const val CLOUD_SEARCH_LOG_TAG = "CloudSearchMediaPicker"
 private const val CLOUD_SERVER_PATH_PREFIX = "__cloud_server__"
+private const val CLOUD_DIRECTORY_CACHE_TTL_MS = 60 * 1000L
 private const val CLOUD_INDEX_SEARCH_PAGE_SIZE = 10_000
 private const val CLOUD_INDEX_SEARCH_MAX_RESULTS = 50_000
 private const val CLOUD_INDEX_PARENT_LIST_PAGE_SIZE = 5_000

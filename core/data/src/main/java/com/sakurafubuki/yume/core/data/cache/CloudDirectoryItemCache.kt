@@ -20,6 +20,15 @@ class CloudDirectoryItemCache @Inject constructor(
         dao.getByParent(serverId, parentPath).map { it.toModel() }
     }
 
+    /**
+     * 若该目录在 [ttlMs] 内被刷过（有缓存且未过期），则视为新鲜，
+     * 浏览时可跳过网络请求直接展示缓存。
+     */
+    suspend fun isFresh(serverId: Int, parentPath: String, ttlMs: Long): Boolean = withContext(Dispatchers.IO) {
+        val lastUpdatedAt = dao.getLastUpdatedAt(serverId, parentPath) ?: return@withContext false
+        System.currentTimeMillis() - lastUpdatedAt <= ttlMs
+    }
+
     fun observe(serverId: Int, parentPath: String): Flow<List<WebDavMediaItem>> = dao.observeByParent(serverId, parentPath)
         .map { entities -> entities.map { it.toModel() } }
         .distinctUntilChanged()

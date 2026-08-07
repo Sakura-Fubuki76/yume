@@ -1,9 +1,11 @@
 package com.sakurafubuki.yume.core.data.openlist
 
+import android.content.Context
 import android.graphics.BitmapFactory
 import androidx.core.net.toUri
 import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.model.WebDavServer
+import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +20,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 @Singleton
 class OpenListApiImpl @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val okHttpClient: OkHttpClient,
 ) : OpenListApi {
 
@@ -28,17 +31,26 @@ class OpenListApiImpl @Inject constructor(
     private val tokenCache = mutableMapOf<String, TokenEntry>()
     private val loginMutex = Mutex()
 
+    /**
+     * 内存优先，miss 时回退磁盘（进程重启后免登录）。TTL 内有效。
+     */
     private fun cachedToken(baseUrl: String): String? {
-        val entry = tokenCache[baseUrl] ?: return null
-        if (System.currentTimeMillis() - entry.cachedAt > TOKEN_TTL_MS) {
+        tokenCache[baseUrl]?.let { entry ->
+            if (System.currentTimeMillis() - entry.cachedAt <= TOKEN_TTL_MS) return entry.token
             tokenCache.remove(baseUrl)
+        }
+        val diskToken = readTokenFromDisk(baseUrl) ?: return null
+        if (System.currentTimeMillis() - diskToken.cachedAt > TOKEN_TTL_MS) {
+            removeTokenFromDisk(baseUrl)
             return null
         }
-        return entry.token
+        tokenCache[baseUrl] = diskToken
+        return diskToken.token
     }
 
     private fun cacheToken(baseUrl: String, token: String) {
         tokenCache[baseUrl] = TokenEntry(token)
+        writeTokenToDisk(baseUrl, token)
     }
 
     override suspend fun login(server: WebDavServer): Result<String> = withContext(Dispatchers.IO) {
@@ -108,6 +120,7 @@ class OpenListApiImpl @Inject constructor(
             var result = executeFsListRequest(baseUrl, jsonBody, authHeader)
             if (result.isAuthFailure && hasLoginCredentials(server)) {
                 tokenCache.remove(baseUrl)
+                removeTokenFromDisk(baseUrl)
                 val token = loginMutex.withLock {
                     cachedToken(baseUrl) ?: login(server).getOrThrow()
                 }
@@ -154,6 +167,7 @@ class OpenListApiImpl @Inject constructor(
             var result = executeFsSearchRequest(baseUrl, jsonBody, authHeader)
             if (result.isAuthFailure && hasLoginCredentials(server)) {
                 tokenCache.remove(baseUrl)
+                removeTokenFromDisk(baseUrl)
                 val token = loginMutex.withLock {
                     cachedToken(baseUrl) ?: login(server).getOrThrow()
                 }
@@ -276,6 +290,37 @@ class OpenListApiImpl @Inject constructor(
         val authority = if (serverUri.port != -1) "${serverUri.host}:${serverUri.port}" else serverUri.host.orEmpty()
         return "${serverUri.scheme}://$authority"
     }
+
+    // ---- token 磁盘持久化 ----
+
+    private val tokenPrefs by lazy {
+        context.getSharedPreferences("openlist_tokens", Context.MODE_PRIVATE)
+    }
+
+    private fun readTokenFromDisk(baseUrl: String): TokenEntry? {
+        val value = tokenPrefs.getString(tokenKey(baseUrl), null) ?: return null
+        val token = value.substringBefore('\n').takeIf { it.isNotBlank() } ?: return null
+        val cachedAt = value.substringAfter('\n', "").toLongOrNull() ?: System.currentTimeMillis()
+        return TokenEntry(token, cachedAt)
+    }
+
+    private fun writeTokenToDisk(baseUrl: String, token: String) {
+        runCatching {
+            tokenPrefs.edit()
+                .putString(tokenKey(baseUrl), "$token\n${System.currentTimeMillis()}")
+                .apply()
+        }
+    }
+
+    private fun removeTokenFromDisk(baseUrl: String) {
+        runCatching {
+            tokenPrefs.edit()
+                .remove(tokenKey(baseUrl))
+                .apply()
+        }
+    }
+
+    private fun tokenKey(baseUrl: String): String = "token_${baseUrl.hashCode().toUInt().toString(16)}"
 
     override suspend fun probeImageDimensions(imageUrl: String): Result<Pair<Int, Int>> = withContext(Dispatchers.IO) {
         runCatching {
