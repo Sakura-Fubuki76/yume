@@ -73,6 +73,7 @@ import com.sakurafubuki.yume.core.data.repository.MoovIndexCache
 import com.sakurafubuki.yume.core.data.repository.Mp4KeyframeExtractor
 import com.sakurafubuki.yume.core.data.repository.PreferencesRepository
 import com.sakurafubuki.yume.core.data.repository.WebDavServerRepository
+import com.sakurafubuki.yume.core.data.webdav.normalizeWebDavPath
 import com.sakurafubuki.yume.core.model.Anime4KRestoreMode
 import com.sakurafubuki.yume.core.model.Anime4KUpscaleMode
 import com.sakurafubuki.yume.core.model.CloudVideoMetadata
@@ -144,6 +145,8 @@ private const val SIGN_REFRESH_HEADER = "X-Yume-Sign-Refreshed"
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
+private const val REMOTE_SUBTITLE_PROBE_DISK_DIR = "remote_subtitle_probe"
+private const val REMOTE_SUBTITLE_PROBE_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000L
 private const val SUBTITLE_DISCOVERY_CACHE_MAX_ENTRIES = 256
 private val SUBTITLE_EPISODE_REGEX = listOf(
     Regex("""(?i)(?:^|[\s._\-\[(])(?:ep?|episode)\s*0*(\d{1,4})(?=$|[\s._\-\]\)])"""),
@@ -622,6 +625,7 @@ class PlayerService : MediaSessionService() {
         val currentPosMs = player.currentPosition
         if (currentPosMs <= 0) return
         scrubPrefetchJob = serviceScope.launch(Dispatchers.IO) {
+            MoovIndexCache.ensureLoadedFromDisk(url)
             val keyframe = MoovIndexCache.findNearestKeyframe(url, currentPosMs)
                 ?: return@launch
 
@@ -1479,6 +1483,7 @@ class PlayerService : MediaSessionService() {
     private suspend fun resolveChaptersForMediaItem(item: MediaItem) {
         try {
             val uri = item.localConfiguration?.uri?.toString() ?: item.mediaId
+            if (MoovIndexCache.ensureLoadedFromDisk(uri)) return
             if (MoovIndexCache.getChapters(uri).isNotEmpty()) return
 
             val path = uri.substringBefore('?').lowercase()
@@ -1499,6 +1504,7 @@ class PlayerService : MediaSessionService() {
     }
 
     private suspend fun resolveCloudVideoDuration(mediaId: String): Long? {
+        MoovIndexCache.ensureLoadedFromDisk(mediaId)
         MoovIndexCache.get(mediaId)?.durationMs?.takeIf { it > 0L }?.let { return it }
         return resolveCloudVideoMetadata(mediaId)?.durationMs?.takeIf { it > 0L }
     }
@@ -1593,6 +1599,11 @@ class PlayerService : MediaSessionService() {
         val cacheKey = remoteSubtitleProbeCacheKey(url)
         getCachedRemoteSubtitles(cacheKey)?.let { cached ->
             Logger.d("PlayerService", "probeRemoteSubtitles: cache hit ${cached.size} subtitles")
+            return@withContext cached.filterNot { it.toString() in excludeUrls }
+        }
+        readRemoteSubtitleProbeFromDisk(cacheKey)?.let { cached ->
+            Logger.d("PlayerService", "probeRemoteSubtitles: disk cache hit ${cached.size} subtitles")
+            putCachedRemoteSubtitles(cacheKey, cached)
             return@withContext cached.filterNot { it.toString() in excludeUrls }
         }
 
@@ -1741,6 +1752,7 @@ class PlayerService : MediaSessionService() {
                 cachedAtMs = System.currentTimeMillis(),
             )
         }
+        writeRemoteSubtitleProbeToDisk(cacheKey, subtitles)
     }
 
     private fun remoteSubtitleProbeCacheKey(url: HttpUrl): String = url.newBuilder()
@@ -1750,6 +1762,44 @@ class PlayerService : MediaSessionService() {
         .fragment(null)
         .build()
         .toString()
+
+    /**
+     * 远程字幕探测结果落盘：每个视频（按去掉 sign 的稳定 URL 为 key）一个文件，
+     * 内容是字幕 URL 列表（每行一个）。磁盘缓存使进程重启后无需重新 HEAD 探测。
+     */
+    private fun writeRemoteSubtitleProbeToDisk(cacheKey: String, subtitles: List<Uri>) {
+        runCatching {
+            val dir = File(cacheDir, REMOTE_SUBTITLE_PROBE_DISK_DIR).apply { mkdirs() }
+            val file = File(dir, remoteSubtitleProbeDiskFileName(cacheKey))
+            file.writeText(subtitles.joinToString("\n") { it.toString() })
+        }.onFailure { error ->
+            Logger.w(TAG, "Failed to write remote subtitle probe cache", error)
+        }
+    }
+
+    private fun readRemoteSubtitleProbeFromDisk(cacheKey: String): List<Uri>? = runCatching {
+        val dir = File(cacheDir, REMOTE_SUBTITLE_PROBE_DISK_DIR)
+        val file = File(dir, remoteSubtitleProbeDiskFileName(cacheKey))
+        if (!file.exists()) return@runCatching null
+        if (System.currentTimeMillis() - file.lastModified() > REMOTE_SUBTITLE_PROBE_DISK_TTL_MS) {
+            file.delete()
+            return@runCatching null
+        }
+        file.readLines()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .map { it.toUri() }
+            .takeIf { it.isNotEmpty() }
+    }.onFailure { error ->
+        Logger.w(TAG, "Failed to read remote subtitle probe cache", error)
+    }.getOrNull()
+
+    private fun remoteSubtitleProbeDiskFileName(cacheKey: String): String {
+        val hash = java.security.MessageDigest.getInstance("MD5")
+            .digest(cacheKey.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        return "$hash.txt"
+    }
 
     private fun createStreamingCache(cacheSizeMb: Int): SimpleCache? {
         if (cacheSizeMb <= 0) return null
@@ -1823,43 +1873,9 @@ class PlayerService : MediaSessionService() {
         )
     }
 
-    @SuppressLint("UseKtx")
-    private fun findMatchingWebDavServer(url: HttpUrl): WebDavServer? {
-        val normalizedPath = normalizePath(url.encodedPath)
+    private fun findMatchingWebDavServer(url: HttpUrl): WebDavServer? = com.sakurafubuki.yume.core.data.webdav.findMatchingWebDavServer(webDavServersById.values, url)
 
-        val pathMatch = webDavServersById.values
-            .asSequence()
-            .filter { server ->
-                val serverUri = server.url.toUri()
-                val serverScheme = serverUri.scheme.orEmpty()
-                val serverHost = serverUri.host.orEmpty()
-                if (!serverScheme.equals(url.scheme, ignoreCase = true)) return@filter false
-                if (!serverHost.equals(url.host, ignoreCase = true)) return@filter false
-                val serverPort = if (serverUri.port != -1) serverUri.port else defaultPort(serverScheme)
-                val requestPort = if (url.port != -1) url.port else defaultPort(url.scheme)
-                if (serverPort != requestPort) return@filter false
-                normalizedPath.startsWith(normalizePath(server.basePath))
-            }
-            .maxByOrNull { normalizePath(it.basePath).length }
-        if (pathMatch != null) return pathMatch
-
-        return webDavServersById.values.firstOrNull { server ->
-            val serverUri = Uri.parse(server.url)
-            serverUri.scheme.equals(url.scheme, ignoreCase = true) &&
-                serverUri.host.equals(url.host, ignoreCase = true) &&
-                (serverUri.port.let { if (it != -1) it else defaultPort(serverUri.scheme.orEmpty()) }) ==
-                (url.port.let { if (it != -1) it else defaultPort(url.scheme) })
-        }
-    }
-
-    private fun normalizePath(path: String): String {
-        val trimmed = path.trim()
-        if (trimmed.isEmpty()) return "/"
-        val withLeadingSlash = if (trimmed.startsWith('/')) trimmed else "/$trimmed"
-        return withLeadingSlash.removeSuffix("/").ifBlank { "/" }
-    }
-
-    private fun defaultPort(scheme: String): Int = if (scheme.equals("https", ignoreCase = true)) 443 else 80
+    private fun normalizePath(path: String): String = normalizeWebDavPath(path)
 
     private fun buildAuthorizationHeader(username: String, password: String): String? {
         val normalizedUsername = username.trim()

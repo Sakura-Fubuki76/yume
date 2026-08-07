@@ -9,6 +9,7 @@ import com.sakurafubuki.yume.BuildConfig
 import com.sakurafubuki.yume.core.cache.ImageCacheManager
 import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.common.di.ApplicationScope
+import com.sakurafubuki.yume.core.data.repository.MoovIndexCache
 import com.sakurafubuki.yume.core.data.repository.PreferencesRepository
 import com.sakurafubuki.yume.core.data.repository.SpriteSheetCache
 import com.sakurafubuki.yume.crash.CrashActivity
@@ -43,6 +44,7 @@ class YumeApplication :
         runtimeImageLoader = appImageLoaderFactory.create()
         ImageCacheManager.registerGlobalImageLoaderRebuilder(::rebuildGlobalImageLoader)
         SpriteSheetCache.init(cacheDir)
+        MoovIndexCache.init(cacheDir)
         runCacheExpiryCleanup()
     }
 
