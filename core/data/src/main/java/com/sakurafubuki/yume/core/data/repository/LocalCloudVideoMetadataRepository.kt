@@ -12,6 +12,7 @@ import coil3.memory.MemoryCache
 import com.sakurafubuki.yume.core.common.Logger
 import com.sakurafubuki.yume.core.common.extensions.stripUserInfoFromHttpUrl
 import com.sakurafubuki.yume.core.data.webdav.WebDavRepository
+import com.sakurafubuki.yume.core.data.webdav.stableWebDavUrl
 import com.sakurafubuki.yume.core.database.dao.WebDavFolderMetadataDao
 import com.sakurafubuki.yume.core.database.dao.WebDavVideoMetadataDao
 import com.sakurafubuki.yume.core.database.entities.WebDavFolderMetadataEntity
@@ -204,7 +205,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                     val localThumbPath = item.apiThumbnailUrl?.let { url ->
                                         downloadApiThumbnail(
                                             imageUrl = url,
-                                            cacheKey = "${server.id}|${item.href}",
+                                            cacheKey = stableWebDavUrl(item.href),
                                             mediaName = item.name,
                                         )
                                     }
@@ -257,7 +258,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                     val hasValidThumbnail = cached?.thumbnailPath?.let { File(it).exists() } ?: false
                     if (!hasValidThumbnail) {
                         val expectedFile = existingThumbnailFile(
-                            cacheKey = "${server.id}|${item.href}",
+                            cacheKey = stableWebDavUrl(item.href),
                             mediaName = item.name,
                         )
                         if (expectedFile.exists()) {
@@ -845,7 +846,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         href: String,
         mediaName: String,
         frame: Bitmap,
-    ): String? = saveThumbnailBitmap("$serverId|$href", mediaName, frame)
+    ): String? = saveThumbnailBitmap(stableWebDavUrl(href), mediaName, frame)
 
     private fun saveThumbnailBitmap(
         cacheKey: String,

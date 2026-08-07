@@ -3,6 +3,7 @@ package com.sakurafubuki.yume.core.data.webdav
 import android.net.Uri
 import com.sakurafubuki.yume.core.model.WebDavServer
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * 在给定服务器集合中查找匹配 URL 的服务器（供播放器、图片加载等共用）。
@@ -44,6 +45,22 @@ fun normalizeWebDavPath(path: String): String {
     if (trimmed.isEmpty()) return "/"
     val withLeadingSlash = if (trimmed.startsWith('/')) trimmed else "/$trimmed"
     return withLeadingSlash.removeSuffix("/").ifBlank { "/" }
+}
+
+/**
+ * 生成 URL 的稳定缓存身份：去掉 userinfo（`user:pass@`）、query（如 OpenList 的
+ * `?sign=`）与 fragment，使同一文件跨 sign 轮换/凭据变化时 key 保持不变。
+ * 非 http(s) URL 原样返回。
+ */
+fun stableWebDavUrl(url: String): String {
+    val parsed = url.toHttpUrlOrNull() ?: return url
+    return parsed.newBuilder()
+        .username("")
+        .password("")
+        .query(null)
+        .fragment(null)
+        .build()
+        .toString()
 }
 
 private fun defaultWebDavPort(scheme: String): Int = if (scheme.equals("https", ignoreCase = true)) 443 else 80

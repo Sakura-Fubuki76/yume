@@ -1,6 +1,7 @@
 package com.sakurafubuki.yume.core.data.repository
 
 import com.sakurafubuki.yume.core.common.Logger
+import com.sakurafubuki.yume.core.data.webdav.stableWebDavUrl
 import com.sakurafubuki.yume.core.model.ChapterEntry
 import java.io.File
 import java.util.LinkedHashMap
@@ -8,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * moov / Matroska 关键帧索引的内存 + 磁盘缓存。
@@ -33,6 +33,8 @@ object MoovIndexCache {
     private const val MOOV_DISK_DIR_NAME = "moov_index"
     private const val MOOV_DISK_TTL_MS = 30L * 24 * 60 * 60 * 1000L
     private const val MOOV_DISK_MAX_FILES = 256
+    private const val MOOV_HASH_LENGTH = 12
+    private const val MOOV_BASENAME_LENGTH = 80
 
     data class Entry(
         val keyframes: List<Mp4KeyframeExtractor.KeyframeEntry>,
@@ -71,16 +73,7 @@ object MoovIndexCache {
         cacheDir = File(dir, MOOV_DISK_DIR_NAME).also { it.mkdirs() }
     }
 
-    private fun cacheKey(url: String): String {
-        val parsed = url.toHttpUrlOrNull() ?: return url
-        return parsed.newBuilder()
-            .username("")
-            .password("")
-            .encodedQuery(null)
-            .fragment(null)
-            .build()
-            .toString()
-    }
+    private fun cacheKey(url: String): String = stableWebDavUrl(url)
 
     /** 纯内存读取（可安全地在主线程调用）。 */
     fun get(url: String): Entry? = synchronized(lock) {
@@ -136,13 +129,14 @@ object MoovIndexCache {
     private fun diskFileName(key: String): String {
         val videoName = key.substringAfterLast('/')
             .substringBefore('?')
-            .take(60)
+            .take(MOOV_BASENAME_LENGTH)
             .replace(Regex("""[\\/:*?"<>|\s]"""), "_")
+            .trim(' ', '.')
             .ifBlank { "moov" }
-        val hash = java.security.MessageDigest.getInstance("MD5")
+        val hash = java.security.MessageDigest.getInstance("SHA-256")
             .digest(key.toByteArray())
             .joinToString("") { "%02x".format(it) }
-            .take(12)
+            .take(MOOV_HASH_LENGTH)
         return "${videoName}_$hash.json"
     }
 
