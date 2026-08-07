@@ -26,6 +26,7 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
@@ -124,6 +125,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -138,6 +140,7 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 private const val TAG = "PlayerService"
 private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
 private const val STREAMING_CACHE_DIR = "streaming_media"
+private const val SIGN_REFRESH_HEADER = "X-Yume-Sign-Refreshed"
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
@@ -632,6 +635,61 @@ class PlayerService : MediaSessionService() {
 
     private fun String.isHttpUrl(): Boolean = startsWith("http://", ignoreCase = true) || startsWith("https://", ignoreCase = true)
 
+    /**
+     * OpenList 的 sign 过期后服务端返回 401。此方法根据当前 URL 解析出文件所在目录，
+     * 重新调用 list API 获取最新的 sign，并用新 sign 重建 URL 以便重试。
+     * 返回 null 表示无法刷新（非 OpenList URL、目录解析失败、或新 sign 未变化）。
+     */
+    @SuppressLint("UseKtx")
+    private fun refreshOpenListSign(url: HttpUrl): HttpUrl? {
+        val server = findMatchingWebDavServer(url) ?: return null
+        val oldSign = url.queryParameter("sign") ?: return null
+
+        val pathSegments = url.encodedPathSegments
+        if (pathSegments.size < 2 || pathSegments.first() != "d") return null
+
+        val fileName = Uri.decode(pathSegments.last())
+        val apiDirPath = if (pathSegments.size == 2) {
+            "/"
+        } else {
+            pathSegments.drop(1).dropLast(1)
+                .joinToString("/", "/", "/") { Uri.decode(it) }
+        }
+
+        val newSign = runBlocking {
+            runCatching {
+                openListApi.listDirectory(server, apiDirPath, page = 1, perPage = 2000, refresh = true)
+            }.getOrNull()?.getOrNull()?.content
+                ?.firstOrNull { !it.is_dir && Uri.decode(it.name) == fileName }
+                ?.sign
+                ?.takeIf { it.isNotBlank() && it != oldSign }
+        } ?: return null
+
+        return url.newBuilder()
+            .setQueryParameter("sign", newSign)
+            .build()
+    }
+
+    private fun buildStableCacheKey(uri: Uri): String {
+        val httpUrl = runCatching { uri.toString().toHttpUrl() }.getOrNull()
+        if (httpUrl != null) {
+            val server = findMatchingWebDavServer(httpUrl)
+            if (server != null) {
+                return "${server.id}|${normalizePath(httpUrl.encodedPath)}"
+            }
+        }
+        // Fallback for URLs that don't match a configured server: strip userinfo,
+        // query parameters (sign) and fragment so the key survives sign rotation.
+        return runCatching {
+            uri.buildUpon()
+                .encodedAuthority(uri.encodedAuthority?.substringAfter('@'))
+                .clearQuery()
+                .fragment(null)
+                .build()
+                .toString()
+        }.getOrDefault(uri.toString())
+    }
+
     private fun cacheHttpRange(
         url: String,
         position: Long,
@@ -642,7 +700,6 @@ class PlayerService : MediaSessionService() {
         runCatching {
             val dataSpec = DataSpec.Builder()
                 .setUri(url)
-                .setKey(url)
                 .setPosition(position)
                 .setLength(length)
                 .setFlags(DataSpec.FLAG_ALLOW_CACHE_FRAGMENTATION or DataSpec.FLAG_MIGHT_NOT_USE_FULL_NETWORK_SPEED)
@@ -932,6 +989,20 @@ class PlayerService : MediaSessionService() {
             }
             .authenticator { _, response ->
                 val requestUri = response.request.url
+
+                // OpenList sign 过期(401)：刷新 sign 并用新 URL 重试一次。
+                if (requestUri.queryParameter("sign") != null &&
+                    response.request.header(SIGN_REFRESH_HEADER) == null
+                ) {
+                    val refreshedUrl = refreshOpenListSign(requestUri)
+                    if (refreshedUrl != null) {
+                        return@authenticator response.request.newBuilder()
+                            .url(refreshedUrl)
+                            .header(SIGN_REFRESH_HEADER, "1")
+                            .build()
+                    }
+                }
+
                 if (response.request.header("Authorization") != null) {
                     return@authenticator null
                 }
@@ -954,10 +1025,14 @@ class PlayerService : MediaSessionService() {
         val upstreamFactory = OkHttpDataSource.Factory(okHttpClient)
         val streamingCache = createStreamingCache(appPreferences.streamingCacheSizeMb)
         this.streamingCache = streamingCache
+        val cacheKeyFactory = object : CacheKeyFactory {
+            override fun buildCacheKey(dataSpec: DataSpec): String = buildStableCacheKey(dataSpec.uri)
+        }
         val prefetchCacheDataSourceFactory = streamingCache?.let { cache ->
             CacheDataSource.Factory()
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(upstreamFactory)
+                .setCacheKeyFactory(cacheKeyFactory)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         }
         streamingCacheDataSourceFactory = prefetchCacheDataSourceFactory
@@ -965,6 +1040,7 @@ class PlayerService : MediaSessionService() {
             CacheDataSource.Factory()
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(upstreamFactory)
+                .setCacheKeyFactory(cacheKeyFactory)
                 .setCacheWriteDataSinkFactory(null)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         }
