@@ -266,49 +266,54 @@ class SpriteSheetGenerator @Inject constructor(
                     "for ${pendingTargets.size} pending cells",
             )
 
-            val pairedData: List<Pair<UniqueFrameTarget, ByteArray?>> =
-                uniqueTargets.chunked(MAX_CONCURRENT_DOWNLOADS).flatMap { batch ->
-                    coroutineScope {
-                        batch.map { target ->
-                            async {
-                                val data = if (isLocal) {
-                                    mp4Extractor.readFileRange(source, target.kf.byteOffset, target.kf.byteSize)
-                                } else {
-                                    mp4Extractor.httpRange(source, target.kf.byteOffset, target.kf.byteSize)
-                                }
-
-                                target to data
+            var roundNativeSolidSkipped = 0
+            var roundBitmapSolidSkipped = 0
+            // 边下边解码：每批下载完立即解码合成并释放 ByteArray，
+            // 避免 100 帧数据同时驻留内存造成 OOM。
+            for (batch in uniqueTargets.chunked(MAX_CONCURRENT_DOWNLOADS)) {
+                val pairedData = coroutineScope {
+                    batch.map { target ->
+                        async {
+                            val data = if (isLocal) {
+                                mp4Extractor.readFileRange(source, target.kf.byteOffset, target.kf.byteSize)
+                            } else {
+                                mp4Extractor.httpRange(source, target.kf.byteOffset, target.kf.byteSize)
                             }
-                        }.awaitAll()
-                    }
-                }
-            bytesDownloaded += pairedData.sumOf { it.second?.size?.toLong() ?: 0L }
 
-            val successEntries = pairedData.mapNotNull { (target, data) ->
-                data?.let { target to it }
+                            target to data
+                        }
+                    }.awaitAll()
+                }
+                bytesDownloaded += pairedData.sumOf { it.second?.size?.toLong() ?: 0L }
+
+                val successEntries = pairedData.mapNotNull { (target, data) ->
+                    data?.let { target to it }
+                }
+                decodedFrames += successEntries.size
+                val batchResult = decodeAndCompositeCandidates(
+                    mp4Extractor = mp4Extractor,
+                    moovInfo = moovInfo,
+                    successEntries = successEntries,
+                    spriteSheet = spriteSheet,
+                    scaleW = scaleW,
+                    scaleH = scaleH,
+                    thumbW = thumbW,
+                    thumbH = thumbH,
+                    gridCols = gridCols,
+                    needsRotation = needsRotation,
+                )
+                framesComposited += batchResult.compositedGridIndices.size
+                pendingGridIndices.removeAll(batchResult.compositedGridIndices)
+                roundNativeSolidSkipped += batchResult.nativeSolidSkippedCells
+                roundBitmapSolidSkipped += batchResult.bitmapSolidSkippedCells
             }
-            decodedFrames += successEntries.size
-            val batchResult = decodeAndCompositeCandidates(
-                mp4Extractor = mp4Extractor,
-                moovInfo = moovInfo,
-                successEntries = successEntries,
-                spriteSheet = spriteSheet,
-                scaleW = scaleW,
-                scaleH = scaleH,
-                thumbW = thumbW,
-                thumbH = thumbH,
-                gridCols = gridCols,
-                needsRotation = needsRotation,
-            )
             Logger.d(
                 TAG,
-                "Round $round result: decoded=${successEntries.size}, " +
-                    "nativeSolidSkipped=${batchResult.nativeSolidSkippedCells}, " +
-                    "bitmapSolidSkipped=${batchResult.bitmapSolidSkippedCells}, " +
-                    "composited=${batchResult.compositedGridIndices.size}",
+                "Round $round result: decoded=$decodedFrames cumulative, " +
+                    "nativeSolidSkipped=$roundNativeSolidSkipped, " +
+                    "bitmapSolidSkipped=$roundBitmapSolidSkipped, " +
+                    "composited=$framesComposited cumulative",
             )
-            framesComposited += batchResult.compositedGridIndices.size
-            pendingGridIndices.removeAll(batchResult.compositedGridIndices)
         }
 
         Logger.d(TAG, "Read ${bytesDownloaded / 1024}KB in ${System.currentTimeMillis() - readStart}ms")
@@ -449,49 +454,54 @@ class SpriteSheetGenerator @Inject constructor(
                     "for ${pendingTargets.size} pending cells",
             )
 
-            val pairedData: List<Pair<UniqueFrameTarget, ByteArray?>> =
-                uniqueTargets.chunked(MAX_CONCURRENT_DOWNLOADS).flatMap { batch ->
-                    coroutineScope {
-                        batch.map { target ->
-                            async {
-                                val data = mkvExtractor.downloadMkvKeyframe(
-                                    source,
-                                    target.kf.byteOffset,
-                                    target.kf.byteSize,
-                                    trackNumber,
-                                )
-                                target to data
-                            }
-                        }.awaitAll()
-                    }
+            var roundNativeSolidSkipped = 0
+            var roundBitmapSolidSkipped = 0
+            // 边下边解码：每批下载完立即解码合成并释放 ByteArray，
+            // 避免 100 帧数据同时驻留内存造成 OOM。
+            for (batch in uniqueTargets.chunked(MAX_CONCURRENT_DOWNLOADS)) {
+                val pairedData = coroutineScope {
+                    batch.map { target ->
+                        async {
+                            val data = mkvExtractor.downloadMkvKeyframe(
+                                source,
+                                target.kf.byteOffset,
+                                target.kf.byteSize,
+                                trackNumber,
+                            )
+                            target to data
+                        }
+                    }.awaitAll()
                 }
-            bytesDownloaded += pairedData.sumOf { it.second?.size?.toLong() ?: 0L }
+                bytesDownloaded += pairedData.sumOf { it.second?.size?.toLong() ?: 0L }
 
-            val successEntries = pairedData.mapNotNull { (target, data) ->
-                data?.let { target to it }
+                val successEntries = pairedData.mapNotNull { (target, data) ->
+                    data?.let { target to it }
+                }
+                decodedFrames += successEntries.size
+                val batchResult = decodeAndCompositeCandidates(
+                    mp4Extractor = mp4Extractor,
+                    moovInfo = moovInfo,
+                    successEntries = successEntries,
+                    spriteSheet = spriteSheet,
+                    scaleW = scaleW,
+                    scaleH = scaleH,
+                    thumbW = thumbW,
+                    thumbH = thumbH,
+                    gridCols = gridCols,
+                    needsRotation = needsRotation,
+                )
+                framesComposited += batchResult.compositedGridIndices.size
+                pendingGridIndices.removeAll(batchResult.compositedGridIndices)
+                roundNativeSolidSkipped += batchResult.nativeSolidSkippedCells
+                roundBitmapSolidSkipped += batchResult.bitmapSolidSkippedCells
             }
-            decodedFrames += successEntries.size
-            val batchResult = decodeAndCompositeCandidates(
-                mp4Extractor = mp4Extractor,
-                moovInfo = moovInfo,
-                successEntries = successEntries,
-                spriteSheet = spriteSheet,
-                scaleW = scaleW,
-                scaleH = scaleH,
-                thumbW = thumbW,
-                thumbH = thumbH,
-                gridCols = gridCols,
-                needsRotation = needsRotation,
-            )
             Logger.d(
                 TAG,
-                "MKV round $round result: decoded=${successEntries.size}, " +
-                    "nativeSolidSkipped=${batchResult.nativeSolidSkippedCells}, " +
-                    "bitmapSolidSkipped=${batchResult.bitmapSolidSkippedCells}, " +
-                    "composited=${batchResult.compositedGridIndices.size}",
+                "MKV round $round result: decoded=$decodedFrames cumulative, " +
+                    "nativeSolidSkipped=$roundNativeSolidSkipped, " +
+                    "bitmapSolidSkipped=$roundBitmapSolidSkipped, " +
+                    "composited=$framesComposited cumulative",
             )
-            framesComposited += batchResult.compositedGridIndices.size
-            pendingGridIndices.removeAll(batchResult.compositedGridIndices)
         }
 
         Logger.d(TAG, "MKV read ${bytesDownloaded / 1024}KB in ${System.currentTimeMillis() - readStart}ms")
