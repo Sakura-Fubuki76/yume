@@ -284,13 +284,9 @@ class PlayerService : MediaSessionService() {
         ) {
             super.onPositionDiscontinuity(oldPosition, newPosition, reason)
 
-            if (reason == DISCONTINUITY_REASON_SEEK && loadControl?.isScrubbing == false) {
-                loadControl?.isScrubbing = true
-                serviceScope.launch {
-                    kotlinx.coroutines.delay(2000L)
-                    loadControl?.isScrubbing = false
-                }
-            }
+            // 注意：scrub 缓冲模式只由 SET_IS_SCRUBBING_MODE_ENABLED（实际拖拽进度条）控制，
+            // 不再由任意 SEEK 自动触发——否则慢速 WebDAV 上每次快进/章节跳转后 2 秒内
+            // 用极小缓冲（300ms 起播/4s 上限）必然二次 rebuffer。
 
             val oldMediaItem = oldPosition.mediaItem ?: return
 
