@@ -172,7 +172,12 @@ private fun MainScreen(
     val selectedScreen = pageToScreen(pagerState.currentPage)
     val imageViewerShowing = selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing
     val bottomBarVisible = !imageViewerShowing
-    val tabSwipeEnabled = bottomBarVisible
+    val isCurrentTabOnRoot = when (selectedScreen) {
+        Screen.Video -> mediaBackStack.size == 1
+        Screen.Image -> imageBackStack.size == 1
+        Screen.Settings -> settingsBackStack.size == 1
+    }
+    val tabSwipeEnabled = bottomBarVisible && isCurrentTabOnRoot
     val imageViewerImmersiveStatusBar = imageViewerShowing
 
     val transitionEngine = remember { TransitionEngine() }
