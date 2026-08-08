@@ -14,12 +14,11 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfoV2
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -43,6 +42,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.window.core.layout.WindowSizeClass
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
@@ -60,7 +60,8 @@ import com.sakurafubuki.yume.core.ui.motion.TransitionEngine
 import com.sakurafubuki.yume.core.ui.theme.YumeTheme
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerRoute
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerStore
-import com.sakurafubuki.yume.navigation.AppBottomNavBar
+import com.sakurafubuki.yume.navigation.AppAdaptiveNavBar
+import com.sakurafubuki.yume.navigation.AppAdaptiveNavigationContainer
 import com.sakurafubuki.yume.navigation.AppNavHost
 import com.sakurafubuki.yume.navigation.Screen
 import com.sakurafubuki.yume.navigation3.ImageBrowserKey
@@ -155,12 +156,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 private fun MainScreen(
     onExitApp: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val windowSizeClass = currentWindowAdaptiveInfoV2().windowSizeClass
     val pagerState = rememberPagerState(initialPage = 0) { 3 }
     val mediaBackStack = rememberNavBackStack(MediaPickerKey())
     val imageBackStack = rememberNavBackStack(ImageBrowserKey())
@@ -224,34 +227,21 @@ private fun MainScreen(
         LocalOverlayContentState provides overlayContentState,
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            Scaffold(
-                containerColor = MaterialTheme.colorScheme.background,
-                contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                bottomBar = {
-                    val barAlpha = if (imageViewerShowing) 0f else 1f
-                    val shouldRenderBar = bottomBarVisible || selectedScreen == Screen.Image
-                    if (shouldRenderBar) {
-                        Box(
-                            modifier = Modifier
-                                .graphicsLayer {
-                                    alpha = barAlpha.coerceIn(0f, 1f)
-                                },
-                        ) {
-                            AppBottomNavBar(
-                                selectedScreen = selectedScreen,
-                                onNavigate = { screen ->
-                                    val targetPage = screenToPage(screen)
-                                    if (targetPage != pagerState.currentPage) {
-                                        scope.launch {
-                                            pagerState.animateScrollToPage(targetPage)
-                                        }
-                                    }
-                                },
-                            )
+            val barAlpha = if (imageViewerShowing) 0f else 1f
+
+            AppAdaptiveNavigationContainer(
+                selectedScreen = selectedScreen,
+                onNavigate = { screen ->
+                    val targetPage = screenToPage(screen)
+                    if (targetPage != pagerState.currentPage) {
+                        scope.launch {
+                            pagerState.animateScrollToPage(targetPage)
                         }
                     }
                 },
-            ) { innerPadding ->
+                windowSizeClass = windowSizeClass,
+                barAlpha = barAlpha.coerceIn(0f, 1f),
+            ) {
                 AppNavHost(
                     context = context,
                     pagerState = pagerState,
@@ -264,9 +254,7 @@ private fun MainScreen(
                         }
                     },
                     userScrollEnabled = tabSwipeEnabled,
-                    modifier = Modifier
-                        .padding(innerPadding)
-                        .fillMaxSize(),
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
 
@@ -280,14 +268,24 @@ private fun MainScreen(
                 if (overlayBottomBarAlpha > 0.001f) {
                     Box(
                         modifier = Modifier
-                            .align(Alignment.BottomCenter)
+                            .align(
+                                if (windowSizeClass.isWidthAtLeastBreakpoint(
+                                        WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND,
+                                    )
+                                ) {
+                                    Alignment.CenterStart
+                                } else {
+                                    Alignment.BottomCenter
+                                },
+                            )
                             .graphicsLayer {
                                 alpha = overlayBottomBarAlpha
                             },
                     ) {
-                        AppBottomNavBar(
+                        AppAdaptiveNavBar(
                             selectedScreen = selectedScreen,
                             onNavigate = {},
+                            windowSizeClass = windowSizeClass,
                         )
                     }
                 }
