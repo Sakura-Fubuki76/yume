@@ -41,7 +41,9 @@ class VideoDurationProbeTest {
             override fun contentType(): MediaType? = null
             override fun contentLength(): Long = bytes.size.toLong()
             override fun source(): BufferedSource = buffer
-            override fun close() { closed = true }
+            override fun close() {
+                closed = true
+            }
         }
         val client = OkHttpClient.Builder().addInterceptor { chain ->
             assertEquals("bytes=0-16383", chain.request().header("Range"))

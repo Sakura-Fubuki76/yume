@@ -50,7 +50,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.update
@@ -404,7 +403,10 @@ class MediaPickerViewModel @Inject constructor(
             var total: Int
             do {
                 val data = openListApi.listDirectory(
-                    server, apiPath, page = page, perPage = perPage,
+                    server,
+                    apiPath,
+                    page = page,
+                    perPage = perPage,
                     refresh = refreshing && page == 1,
                 ).getOrThrow()
                 total = data.total

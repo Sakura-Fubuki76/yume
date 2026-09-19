@@ -37,7 +37,6 @@ suspend fun probeVideoDurationMs(
         // A malformed/failed video must not cancel metadata collection for its siblings.
         null
     }
-
 }
 private suspend fun fetchWithRetry(
     url: String,
