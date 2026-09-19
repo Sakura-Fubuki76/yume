@@ -765,13 +765,21 @@ class PlayerService : MediaSessionService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
-            val connectionResult = super.onConnect(session, controller)
+            // Media3 1.11+ 的默认 onConnect 返回 Player.Commands.EMPTY，直接透传会导致
+            // controller 的 intersectedPlayerCommands 为空，setMediaItems/play/prepare 等
+            // 播放命令会被 MCImplBase 静默丢弃。
+            //
+            // 注意不能改用 session.player.availableCommands：它在连接时是 player 的
+            // 动态快照，IDLE 状态（itemCount=0）下不含 SEEK 相关命令，而
+            // MediaController.seekTo() 实际检查 COMMAND_SET_SPEED_AND_PITCH(5)，
+            // 会导致拖动进度条时 seek 被全部拦截。必须返回完整命令集，让 controller
+            // 侧自行按当前状态求交集。
             return MediaSession.ConnectionResult.accept(
-                connectionResult.availableSessionCommands
+                super.onConnect(session, controller).availableSessionCommands
                     .buildUpon()
                     .addSessionCommands(customCommands)
                     .build(),
-                connectionResult.availablePlayerCommands,
+                MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS,
             )
         }
 

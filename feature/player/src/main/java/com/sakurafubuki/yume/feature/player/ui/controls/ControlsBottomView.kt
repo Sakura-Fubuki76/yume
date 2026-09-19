@@ -27,8 +27,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderState
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -306,7 +306,12 @@ private fun MaterialYouSlider(
     val thumbWidth = 4.dp
     val trackThumbGapWidth = 12.dp
 
-    val state = rememberSliderState(value = value, steps = 0, trackRange = valueRange)
+    // Create the state only when the range changes; rememberSliderState keys on
+    // `value` too, which would rebuild the state (and drop drag state) on every
+    // playback tick. The LaunchedEffect below drives external value changes.
+    val state = remember(valueRange) {
+        SliderState(value = value, steps = 0, trackRange = valueRange)
+    }
     var isDragging by remember { mutableStateOf(false) }
     // SliderState does not follow external value changes; drive it from playback
     // ticks unless the user is dragging.
@@ -461,7 +466,11 @@ private fun SimpleSlider(
     val rangeEnd = valueRange.endInclusive.takeIf { it > 0f } ?: 1f
     val playedFraction = (value / rangeEnd).coerceIn(0f, 1f)
     val bufferedFraction = (bufferedValue / rangeEnd).coerceIn(playedFraction, 1f)
-    val state = rememberSliderState(value = value, steps = 0, trackRange = valueRange)
+    // See MaterialYouSlider: create the state keyed on range only, otherwise the
+    // state (and drag progress) is rebuilt on every playback tick.
+    val state = remember(valueRange) {
+        SliderState(value = value, steps = 0, trackRange = valueRange)
+    }
     var isDragging by remember { mutableStateOf(false) }
     // SliderState does not follow external value changes; drive it from playback
     // ticks unless the user is dragging.
