@@ -71,6 +71,7 @@ import com.sakurafubuki.yume.navigation.pageToScreen
 import com.sakurafubuki.yume.navigation.screenToPage
 import com.sakurafubuki.yume.navigation3.ImageBrowserKey
 import com.sakurafubuki.yume.navigation3.MediaPickerKey
+import com.sakurafubuki.yume.navigation3.RecentHomeKey
 import com.sakurafubuki.yume.navigation3.SettingsHomeKey
 import com.sakurafubuki.yume.navigation3.popOrFalse
 import dagger.hilt.android.AndroidEntryPoint
@@ -169,9 +170,10 @@ private fun MainScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val windowSizeClass = currentWindowAdaptiveInfoV2().windowSizeClass
-    val pagerState = rememberPagerState(initialPage = 0) { 3 }
+    val pagerState = rememberPagerState(initialPage = 0) { 4 }
     val mediaBackStack = rememberNavBackStack(MediaPickerKey())
     val imageBackStack = rememberNavBackStack(ImageBrowserKey())
+    val recentBackStack = rememberNavBackStack(RecentHomeKey)
     val settingsBackStack = rememberNavBackStack(SettingsHomeKey)
 
     val selectedScreen = pageToScreen(pagerState.currentPage)
@@ -180,6 +182,7 @@ private fun MainScreen(
     val isCurrentTabOnRoot = when (selectedScreen) {
         Screen.Video -> mediaBackStack.size == 1
         Screen.Image -> imageBackStack.size == 1
+        Screen.Recent -> recentBackStack.size == 1
         Screen.Settings -> settingsBackStack.size == 1
     }
     val tabSwipeEnabled = !imageViewerShowing && isCurrentTabOnRoot
@@ -223,6 +226,7 @@ private fun MainScreen(
                     imageBackStack.popOrFalse()
                 }
             }
+            Screen.Recent -> recentBackStack.popOrFalse()
             Screen.Settings -> settingsBackStack.popOrFalse()
         }
         if (popped) return@BackHandler
@@ -259,6 +263,7 @@ private fun MainScreen(
                     pagerState = pagerState,
                     mediaBackStack = mediaBackStack,
                     imageBackStack = imageBackStack,
+                    recentBackStack = recentBackStack,
                     settingsBackStack = settingsBackStack,
                     onNavigateToSettingsTab = {
                         scope.launch {

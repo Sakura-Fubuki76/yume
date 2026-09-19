@@ -104,6 +104,7 @@ private fun PerformancePreferencesContent(
             val streamingMaxBufferTitle = stringResource(R.string.streaming_max_buffer)
             val streamingBufferForPlaybackTitle = stringResource(R.string.streaming_buffer_for_playback)
             val streamingBufferAfterRebufferTitle = stringResource(R.string.streaming_buffer_after_rebuffer)
+            val streamingBackBufferTitle = stringResource(R.string.streaming_back_buffer)
             val streamingCacheSizeTitle = stringResource(R.string.streaming_cache_size)
             val imageCacheWarning = uiState.imageCacheSizeMb > 0 &&
                 uiState.currentImageCacheUsageMb * 10 >= uiState.imageCacheSizeMb * 9L
@@ -408,6 +409,44 @@ private fun PerformancePreferencesContent(
                                 onEvent(
                                     MediaLibraryPreferencesUiEvent.UpdateStreamingBufferForPlaybackAfterRebufferMs(it),
                                 )
+                            },
+                        )
+                    },
+                    isFirstItem = false,
+                    isLastItem = false,
+                )
+                PreferenceSlider(
+                    title = streamingBackBufferTitle,
+                    description = stringResource(R.string.buffer_ms_value, uiState.streamingBackBufferMs),
+                    icon = NextIcons.History,
+                    value = uiState.streamingBackBufferMs.toFloat(),
+                    valueRange = ApplicationPreferences.MIN_STREAMING_BACK_BUFFER_MS.toFloat()..ApplicationPreferences.MAX_STREAMING_BACK_BUFFER_MS.toFloat(),
+                    steps = discreteSliderSteps(
+                        minValue = ApplicationPreferences.MIN_STREAMING_BACK_BUFFER_MS,
+                        maxValue = ApplicationPreferences.MAX_STREAMING_BACK_BUFFER_MS,
+                        stepSize = STREAMING_LARGE_BUFFER_STEP_MS,
+                    ),
+                    onValueChange = {
+                        onEvent(
+                            MediaLibraryPreferencesUiEvent.UpdateStreamingBackBufferMs(
+                                snapSliderValue(
+                                    value = it,
+                                    minValue = ApplicationPreferences.MIN_STREAMING_BACK_BUFFER_MS,
+                                    maxValue = ApplicationPreferences.MAX_STREAMING_BACK_BUFFER_MS,
+                                    stepSize = STREAMING_LARGE_BUFFER_STEP_MS,
+                                ),
+                            ),
+                        )
+                    },
+                    onClick = {
+                        pendingCustomValueInput = CustomValueInputDialogState(
+                            title = streamingBackBufferTitle,
+                            initialValue = uiState.streamingBackBufferMs,
+                            minValue = ApplicationPreferences.MIN_STREAMING_BACK_BUFFER_MS,
+                            maxValue = ApplicationPreferences.MAX_STREAMING_BACK_BUFFER_MS,
+                            stepSize = STREAMING_LARGE_BUFFER_STEP_MS,
+                            onConfirm = {
+                                onEvent(MediaLibraryPreferencesUiEvent.UpdateStreamingBackBufferMs(it))
                             },
                         )
                     },

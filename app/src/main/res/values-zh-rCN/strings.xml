@@ -2,5 +2,6 @@
 <resources>
     <string name="bottom_nav_video">视频</string>
     <string name="bottom_nav_images">图片</string>
+    <string name="bottom_nav_recent">最近</string>
     <string name="bottom_nav_settings">设置</string>
 </resources>

@@ -7,6 +7,10 @@
     <string name="appearance_name">Appearance</string>
     <string name="ascending">Ascending</string>
     <string name="cancel">Cancel</string>
+    <string name="recent_playback_title">Recent</string>
+    <string name="recent_playback_empty">Nothing played recently yet</string>
+    <string name="remove_recent_playback">Remove from recent</string>
+    <string name="remove_recent_playback_confirmation">Remove "%1$s" from recently played?</string>
     <string name="descending">Descending</string>
     <string name="disable">Disable</string>
     <string name="done">Done</string>
@@ -399,6 +403,7 @@
     <string name="streaming_max_buffer">Maximum buffer</string>
     <string name="streaming_buffer_for_playback">Buffer for initial playback</string>
     <string name="streaming_buffer_after_rebuffer">Buffer after rebuffer</string>
+    <string name="streaming_back_buffer">In-memory back buffer</string>
     <string name="buffer_ms_value">%1$d ms</string>
     <string name="disk_cache_size">Disk cache size</string>
     <string name="image_cache_size">Cloud image cache size</string>

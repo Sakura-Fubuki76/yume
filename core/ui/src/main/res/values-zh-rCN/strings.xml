@@ -7,6 +7,10 @@
     <string name="done">确定</string>
     <string name="appearance_name">外观</string>
     <string name="cancel">取消</string>
+    <string name="recent_playback_title">最近</string>
+    <string name="recent_playback_empty">暂无最近播放的视频</string>
+    <string name="remove_recent_playback">从最近播放中移除</string>
+    <string name="remove_recent_playback_confirmation">将“%1$s”从最近播放中移除？</string>
     <string name="disable">停用</string>
     <string name="error_playing_video">错误：无法播放视频</string>
     <string name="resume">继续播放</string>
@@ -409,6 +413,7 @@
     <string name="streaming_max_buffer">最大缓冲</string>
     <string name="streaming_buffer_for_playback">初始播放缓冲</string>
     <string name="streaming_buffer_after_rebuffer">重新缓冲后缓冲</string>
+    <string name="streaming_back_buffer">内存回退缓冲</string>
     <string name="image_quality_title">图像质量</string>
     <string name="image_quality_original">原始</string>
     <string name="image_quality_high">高（75%）</string>

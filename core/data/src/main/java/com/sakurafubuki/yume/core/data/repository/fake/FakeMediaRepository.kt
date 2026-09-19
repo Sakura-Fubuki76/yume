@@ -19,9 +19,15 @@ class FakeMediaRepository : MediaRepository {
 
     override fun getFoldersFlow(): Flow<List<Folder>> = flowOf(directories)
 
+    override fun getRecentlyPlayedVideosFlow(limit: Int): Flow<List<Video>> = flowOf(videos.filter { it.lastPlayedAt != null }.sortedByDescending { it.lastPlayedAt?.time }.take(limit))
+
     override suspend fun getVideoByUri(uri: String): Video? = videos.find { it.path == uri }
 
     override suspend fun getVideoState(uri: String): VideoState? = null
+
+    override suspend fun clearRecentlyPlayed(uri: String) {
+        videos.removeAll { it.uriString == uri }
+    }
 
     override suspend fun updateMediumLastPlayedTime(uri: String, lastPlayedTime: Long) {
     }

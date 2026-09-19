@@ -52,6 +52,18 @@ interface MediumDao {
     @Query("SELECT * FROM media LIMIT :limit OFFSET :offset")
     fun getAllWithInfoPaginated(limit: Int, offset: Int): Flow<List<MediumWithInfo>>
 
+    @Transaction
+    @Query(
+        """
+        SELECT media.* FROM media
+        INNER JOIN media_state ON media.uri = media_state.uri
+        WHERE media_state.last_played_time IS NOT NULL
+        ORDER BY media_state.last_played_time DESC
+        LIMIT :limit
+        """,
+    )
+    fun getRecentlyPlayedWithInfo(limit: Int): Flow<List<MediumWithInfo>>
+
     @Query("SELECT COUNT(*) FROM media")
     suspend fun getCount(): Int
 

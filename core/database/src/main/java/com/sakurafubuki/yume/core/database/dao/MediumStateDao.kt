@@ -38,6 +38,9 @@ interface MediumStateDao {
     @Query("UPDATE media_state SET last_played_time = :lastPlayedTime WHERE uri = :uri")
     suspend fun updateLastPlayedTime(uri: String, lastPlayedTime: Long): Int
 
+    @Query("UPDATE media_state SET last_played_time = NULL WHERE uri = :uri")
+    suspend fun clearLastPlayedTime(uri: String)
+
     @Query(
         "UPDATE media_state SET playback_position = :position, last_played_time = :lastPlayedTime WHERE uri = :uri",
     )

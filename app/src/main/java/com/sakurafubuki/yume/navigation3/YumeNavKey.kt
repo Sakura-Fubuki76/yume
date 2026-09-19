@@ -35,6 +35,12 @@ data class ImageBrowserKey(
 ) : ImageNavKey
 
 @Serializable
+sealed interface RecentNavKey : YumeNavKey
+
+@Serializable
+data object RecentHomeKey : RecentNavKey
+
+@Serializable
 sealed interface SettingsNavKey : YumeNavKey
 
 @Serializable

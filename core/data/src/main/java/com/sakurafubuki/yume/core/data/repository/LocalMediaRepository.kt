@@ -43,6 +43,10 @@ class LocalMediaRepository @Inject constructor(
         .map { it.map(DirectoryWithMedia::toFolder) }
         .distinctUntilChanged()
 
+    override fun getRecentlyPlayedVideosFlow(limit: Int): Flow<List<Video>> = mediumDao.getRecentlyPlayedWithInfo(limit = limit)
+        .map { it.map(MediumWithInfo::toVideo) }
+        .distinctUntilChanged()
+
     override suspend fun getVideoByUri(uri: String): Video? = mediumDao.getWithInfo(uri)?.toVideo()
 
     override suspend fun getVideoState(uri: String): VideoState? = mediumStateDao.get(uri)?.toVideoState()
@@ -54,6 +58,10 @@ class LocalMediaRepository @Inject constructor(
     override suspend fun updateMediumLastPlayedTime(uri: String, lastPlayedTime: Long) {
         ensureStateRow(uri)
         mediumStateDao.updateLastPlayedTime(uri, lastPlayedTime)
+    }
+
+    override suspend fun clearRecentlyPlayed(uri: String) {
+        mediumStateDao.clearLastPlayedTime(uri)
     }
 
     override suspend fun updateMediumPosition(uri: String, position: Long) {
