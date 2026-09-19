@@ -28,8 +28,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSliderState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -296,17 +298,33 @@ private fun MaterialYouSlider(
     onValueChangeFinished: () -> Unit,
 ) {
     val primaryColor = MaterialTheme.colorScheme.primary
-    val bufferedColor = MaterialTheme.colorScheme.primaryContainer
+    // Lighter than the played track (full alpha) but clearly visible on the dark
+    // dimmed track; primaryContainer was too dark to read in dark theme.
+    val bufferedColor = primaryColor.copy(alpha = 0.65f)
     val interactionSource = remember { MutableInteractionSource() }
     val trackHeight = 8.dp
     val thumbWidth = 4.dp
     val trackThumbGapWidth = 12.dp
 
+    val state = rememberSliderState(value = value, steps = 0, trackRange = valueRange)
+    var isDragging by remember { mutableStateOf(false) }
+    // SliderState does not follow external value changes; drive it from playback
+    // ticks unless the user is dragging.
+    LaunchedEffect(value) {
+        if (!isDragging) state.value = value
+    }
+
     Slider(
-        value = value,
-        valueRange = valueRange,
-        onValueChange = onValueChange,
-        onValueChangeFinished = onValueChangeFinished,
+        state = state,
+        onValueChange = { newValue ->
+            isDragging = true
+            state.value = newValue
+            onValueChange(newValue)
+        },
+        onValueChangeFinished = {
+            isDragging = false
+            onValueChangeFinished()
+        },
         interactionSource = interactionSource,
         modifier = modifier.size(24.dp),
         track = { sliderState ->
@@ -317,8 +335,8 @@ private fun MaterialYouSlider(
                     .fillMaxWidth()
                     .height(trackHeight),
             ) {
-                val min = sliderState.valueRange.start
-                val max = sliderState.valueRange.endInclusive
+                val min = sliderState.trackRange.start
+                val max = sliderState.trackRange.endInclusive
                 val range = (max - min).takeIf { it > 0f } ?: 1f
                 val playedFraction = ((sliderState.value - min) / range).coerceIn(0f, 1f)
                 val bufferedFraction = ((bufferedValue - min) / range).coerceIn(playedFraction, 1f)
@@ -443,11 +461,24 @@ private fun SimpleSlider(
     val rangeEnd = valueRange.endInclusive.takeIf { it > 0f } ?: 1f
     val playedFraction = (value / rangeEnd).coerceIn(0f, 1f)
     val bufferedFraction = (bufferedValue / rangeEnd).coerceIn(playedFraction, 1f)
+    val state = rememberSliderState(value = value, steps = 0, trackRange = valueRange)
+    var isDragging by remember { mutableStateOf(false) }
+    // SliderState does not follow external value changes; drive it from playback
+    // ticks unless the user is dragging.
+    LaunchedEffect(value) {
+        if (!isDragging) state.value = value
+    }
     Slider(
-        value = value,
-        valueRange = valueRange,
-        onValueChange = onValueChange,
-        onValueChangeFinished = onValueChangeFinished,
+        state = state,
+        onValueChange = { newValue ->
+            isDragging = true
+            state.value = newValue
+            onValueChange(newValue)
+        },
+        onValueChangeFinished = {
+            isDragging = false
+            onValueChangeFinished()
+        },
         modifier = modifier.height(20.dp),
         thumb = {
             Box(
@@ -495,7 +526,7 @@ private fun SimpleSlider(
                         modifier = Modifier
                             .fillMaxWidth(bufferedFraction)
                             .height(4.dp)
-                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)),
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)),
                     )
                 }
                 if (valueRange.endInclusive > 0f) {

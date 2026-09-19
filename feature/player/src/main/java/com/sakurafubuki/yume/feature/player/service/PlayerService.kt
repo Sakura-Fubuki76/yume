@@ -67,6 +67,7 @@ import com.sakurafubuki.yume.core.common.extensions.subtitleCacheDir
 import com.sakurafubuki.yume.core.data.di.StreamingHttpClient
 import com.sakurafubuki.yume.core.data.openlist.OpenListApi
 import com.sakurafubuki.yume.core.data.repository.CloudVideoMetadataRepository
+import com.sakurafubuki.yume.core.data.repository.ContentLengthCache
 import com.sakurafubuki.yume.core.data.repository.MediaRepository
 import com.sakurafubuki.yume.core.data.repository.MkvKeyframeExtractor
 import com.sakurafubuki.yume.core.data.repository.MoovIndexCache
@@ -143,6 +144,11 @@ private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
 private const val STREAMING_CACHE_DIR = "streaming_media"
 private const val SIGN_REFRESH_HEADER = "X-Yume-Sign-Refreshed"
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
+
+// After a seek the player only fills its (small) scrub buffer and stops loading.
+// On unlimited Wi-Fi we keep downloading the range after the seek target so
+// scrubbing back / stepping around stays instant. Bounded by cache eviction.
+private const val SEEK_CONTINUATION_WINDOW_MS = 30L * 60L * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
 private const val REMOTE_SUBTITLE_PROBE_DISK_DIR = "remote_subtitle_probe"
@@ -175,6 +181,7 @@ class PlayerService : MediaSessionService() {
     private var prebufferKey: String? = null
     private var loadControl: ScrubbingAwareLoadControl? = null
     private var scrubPrefetchJob: Job? = null
+    private var continuationCacheJob: Job? = null
 
     @Inject
     lateinit var preferencesRepository: PreferencesRepository
@@ -715,6 +722,32 @@ class PlayerService : MediaSessionService() {
         }
     }
 
+    /**
+     * After a scrub ends the player fills only the small scrub buffer and stops loading.
+     * Continue downloading [SEEK_CONTINUATION_WINDOW_MS] of content from the seek target
+     * into the streaming cache so later seeks inside that window play instantly.
+     */
+    private fun startSeekContinuationCache() {
+        continuationCacheJob?.cancel()
+        val player = mediaSession?.player ?: return
+        val url = player.currentMediaItem?.mediaId ?: return
+        if (!url.isHttpUrl()) return
+        val positionMs = player.currentPosition
+        val durationMs = player.duration
+        if (durationMs <= 0L || positionMs <= 0L) return
+        val totalLength = ContentLengthCache.get(url) ?: return
+        if (totalLength <= 0L) return
+
+        val startByte = (totalLength.toDouble() * positionMs / durationMs).toLong().coerceAtLeast(0L)
+        val endFraction = (positionMs + SEEK_CONTINUATION_WINDOW_MS).coerceAtMost(durationMs)
+        val endByte = (totalLength.toDouble() * endFraction / durationMs).toLong().coerceAtMost(totalLength)
+        val length = (endByte - startByte).coerceAtLeast(1L)
+
+        continuationCacheJob = serviceScope.launch(Dispatchers.IO) {
+            cacheHttpRange(url, position = startByte, length = length)
+        }
+    }
+
     private fun setEnhancerTargetGain(gain: Int) {
         val enhancer = loudnessEnhancer ?: return
 
@@ -844,6 +877,7 @@ class PlayerService : MediaSessionService() {
                         prefetchScrubKeyframe()
                     } else {
                         scrubPrefetchJob?.cancel()
+                        startSeekContinuationCache()
                     }
                     return@future SessionResult(SessionResult.RESULT_SUCCESS)
                 }
@@ -1135,6 +1169,7 @@ class PlayerService : MediaSessionService() {
         artworkLoadJob?.cancel()
         prebufferJob?.cancel()
         scrubPrefetchJob?.cancel()
+        continuationCacheJob?.cancel()
         subtitleDiscoveryInFlight.clear()
         subtitleDiscoveryCompleted.clear()
         loudnessEnhancer?.release()

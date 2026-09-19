@@ -103,6 +103,9 @@ class MediaPresentationState(
 
                 if (events.contains(Player.EVENT_POSITION_DISCONTINUITY)) {
                     updatePosition()
+                    // Seek resets the buffer window; refresh immediately so the buffered
+                    // bar does not keep showing the pre-seek range for up to a tick.
+                    updateBufferedPosition()
                 }
 
                 if (events.containsAny(
