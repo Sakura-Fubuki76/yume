@@ -115,6 +115,7 @@ import com.sakurafubuki.yume.core.model.MediaLayoutMode
 import com.sakurafubuki.yume.core.model.MediaMode
 import com.sakurafubuki.yume.core.model.MediaViewMode
 import com.sakurafubuki.yume.core.model.Video
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.CancelButton
 import com.sakurafubuki.yume.core.ui.components.NextDialog
@@ -426,7 +427,8 @@ private fun ImageBrowserScreen(
         )
         val mediaContentPadding = PaddingValues(
             top = topBarHeight,
-            bottom = 8.dp,
+            // Extra scroll range so the last row clears the floating bar.
+            bottom = 8.dp + FloatingNavigationClearance,
         )
         AnimatedContent(
             targetState = uiState.mode,

@@ -33,6 +33,7 @@ import com.sakurafubuki.yume.core.common.extensions.round
 import com.sakurafubuki.yume.core.common.extensions.toString
 import com.sakurafubuki.yume.core.model.DoubleTapGesture
 import com.sakurafubuki.yume.core.model.PlayerPreferences
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.ListSectionTitle
 import com.sakurafubuki.yume.core.ui.components.NextDialogWithDoneAndCancelButtons
@@ -89,7 +90,7 @@ private fun GesturePreferencesContent(
                 .fillMaxSize()
                 .verticalScroll(state = rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
         ) {
             ListSectionTitle(text = stringResource(id = R.string.gestures))
             Column(

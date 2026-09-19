@@ -40,6 +40,7 @@ import com.google.accompanist.permissions.shouldShowRationale
 import com.sakurafubuki.yume.core.common.webDavPermissions
 import com.sakurafubuki.yume.core.model.ThumbnailGenerationStrategy
 import com.sakurafubuki.yume.core.model.WebDavServer
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.ClickablePreferenceItem
 import com.sakurafubuki.yume.core.ui.components.ListSectionTitle
@@ -110,7 +111,7 @@ private fun MediaLibraryPreferencesContent(
                 .fillMaxSize()
                 .verticalScroll(state = rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
         ) {
             ListSectionTitle(text = stringResource(id = R.string.media_library))
             Column(verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {

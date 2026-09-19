@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.util.withContext
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.NextSegmentedListItem
 import com.sakurafubuki.yume.core.ui.components.NextTopAppBar
@@ -63,7 +64,7 @@ fun LibrariesScreen(
 
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = innerPadding + PaddingValues(horizontal = 16.dp),
+            contentPadding = innerPadding + PaddingValues(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
             verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
         ) {
             item(key = "app_usage") {

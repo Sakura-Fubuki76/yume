@@ -50,6 +50,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.sakurafubuki.yume.core.common.extensions.appIcon
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.NextTopAppBar
 import com.sakurafubuki.yume.core.ui.designsystem.NextIcons
@@ -86,7 +87,7 @@ fun AboutPreferencesScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
         ) {
             AboutApp(
                 onGithubClick = {

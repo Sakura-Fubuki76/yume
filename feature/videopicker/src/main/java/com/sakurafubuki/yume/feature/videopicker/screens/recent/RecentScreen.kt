@@ -38,6 +38,7 @@ import androidx.core.net.toUri
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sakurafubuki.yume.core.model.Video
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.CancelButton
 import com.sakurafubuki.yume.core.ui.components.NextDialog
@@ -81,7 +82,8 @@ internal fun RecentScreen(
             top = scaffoldPadding.calculateTopPadding(),
             start = 8.dp,
             end = 8.dp,
-            bottom = 0.dp,
+            // Extra scroll range so the last row clears the floating bar.
+            bottom = FloatingNavigationClearance,
         )
 
         when {

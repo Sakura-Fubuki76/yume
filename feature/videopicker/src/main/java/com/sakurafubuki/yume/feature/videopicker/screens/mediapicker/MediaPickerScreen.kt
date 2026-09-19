@@ -87,6 +87,7 @@ import com.sakurafubuki.yume.core.model.Folder
 import com.sakurafubuki.yume.core.model.MediaLayoutMode
 import com.sakurafubuki.yume.core.model.MediaViewMode
 import com.sakurafubuki.yume.core.model.Video
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.base.DataState
 import com.sakurafubuki.yume.core.ui.components.CancelButton
@@ -493,7 +494,12 @@ internal fun MediaPickerScreen(
                             isRefreshing = uiState.refreshing,
                             onRefresh = { onEvent(MediaPickerUiEvent.Refresh) },
                         ) {
-                            val updatedScaffoldPadding = contentScaffoldPadding.copy(top = 0.dp, bottom = 0.dp, start = 0.dp)
+                            val updatedScaffoldPadding = contentScaffoldPadding.copy(
+                                top = 0.dp,
+                                start = 0.dp,
+                                // Extra scroll range so the last row clears the floating bar.
+                                bottom = FloatingNavigationClearance,
+                            )
                             PermissionMissingView(
                                 isGranted = permissionGranted,
                                 showRationale = showPermissionRationale,
