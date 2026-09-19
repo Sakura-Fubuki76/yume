@@ -31,7 +31,7 @@ kotlinxSerializationJson = "1.11.0"
 ksp = "2.3.12"
 ktlint = "14.2.0"
 reorderable = "3.1.0"
-room = "2.8.4"
+room = "2.8.5"
 
 universalChardet = "2.5.0"
 sardine = "0.9"
