@@ -23,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.CancelButton
 import com.sakurafubuki.yume.core.ui.components.ClickablePreferenceItem
@@ -73,7 +74,7 @@ private fun GeneralPreferencesContent(
                 .fillMaxSize()
                 .verticalScroll(state = rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
         ) {
             ListSectionTitle(text = stringResource(id = R.string.user_data))
             Column(

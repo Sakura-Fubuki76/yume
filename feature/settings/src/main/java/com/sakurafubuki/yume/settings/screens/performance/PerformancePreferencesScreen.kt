@@ -37,6 +37,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sakurafubuki.yume.core.model.ApplicationPreferences
 import com.sakurafubuki.yume.core.model.CacheExpiry
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.CancelButton
 import com.sakurafubuki.yume.core.ui.components.ClickablePreferenceItem
@@ -95,7 +96,7 @@ private fun PerformancePreferencesContent(
                 .fillMaxSize()
                 .verticalScroll(state = rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
         ) {
             val imageCacheSizeTitle = stringResource(R.string.image_cache_size)
             val imageBrowserThumbnailSizeTitle = stringResource(R.string.image_browser_thumbnail_size)

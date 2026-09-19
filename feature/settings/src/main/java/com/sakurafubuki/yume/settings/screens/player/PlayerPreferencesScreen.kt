@@ -32,6 +32,7 @@ import com.sakurafubuki.yume.core.model.PlayerPreferences
 import com.sakurafubuki.yume.core.model.Resume
 import com.sakurafubuki.yume.core.model.ScreenOrientation
 import com.sakurafubuki.yume.core.model.VideoEffectType
+import com.sakurafubuki.yume.core.ui.FloatingNavigationClearance
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.components.ClickablePreferenceItem
 import com.sakurafubuki.yume.core.ui.components.ListSectionTitle
@@ -87,7 +88,7 @@ private fun PlayerPreferencesContent(
                 .fillMaxSize()
                 .verticalScroll(state = rememberScrollState())
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(start = 16.dp, end = 16.dp, bottom = FloatingNavigationClearance),
         ) {
             ListSectionTitle(text = stringResource(id = R.string.interface_name))
             Column(

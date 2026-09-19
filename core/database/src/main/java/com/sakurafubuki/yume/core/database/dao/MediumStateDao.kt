@@ -32,6 +32,12 @@ interface MediumStateDao {
     @Query("SELECT * FROM media_state")
     fun getAll(): Flow<List<MediumStateEntity>>
 
+    @Query(
+        "SELECT * FROM media_state WHERE last_played_time IS NOT NULL " +
+            "ORDER BY last_played_time DESC LIMIT :limit",
+    )
+    fun observeRecentlyPlayedStates(limit: Int): Flow<List<MediumStateEntity>>
+
     @Query("SELECT * FROM media_state WHERE uri IN (:uris)")
     suspend fun getAllByUris(uris: List<String>): List<MediumStateEntity>
 
