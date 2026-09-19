@@ -11,7 +11,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -128,7 +127,8 @@ import com.sakurafubuki.yume.core.ui.motion.LocalSharedElementRegistry
 import com.sakurafubuki.yume.core.ui.motion.LocalTransitionEngine
 import com.sakurafubuki.yume.core.ui.motion.SharedElementRegistry
 import com.sakurafubuki.yume.core.ui.motion.TransitionType
-import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpringSpec
+import com.sakurafubuki.yume.core.ui.motion.YumeTransitionEasing
+import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpec
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
@@ -198,13 +198,13 @@ private const val IMAGE_GRID_MIN_SCREEN_PRELOAD_ITEMS = 8
 private const val CLOUD_SERVER_PATH_PREFIX = "__cloud_server__"
 private val DEFAULT_IMAGE_QUALITY = ImageQuality.HIGH
 private val VIEWER_IMAGE_QUALITY = ImageQuality.ORIGINAL
-private val IMAGE_VIEWER_OPEN_ANIMATION = spring<Float>(
-    dampingRatio = 1f,
-    stiffness = 420f,
+private val IMAGE_VIEWER_OPEN_ANIMATION = tween<Float>(
+    durationMillis = 280,
+    easing = YumeTransitionEasing,
 )
-private val IMAGE_VIEWER_CLOSE_ANIMATION = spring<Float>(
-    dampingRatio = 1f,
-    stiffness = 560f,
+private val IMAGE_VIEWER_CLOSE_ANIMATION = tween<Float>(
+    durationMillis = 220,
+    easing = YumeTransitionEasing,
 )
 
 private const val BG_ALPHA_CURVE_POWER = 0.4f
@@ -412,7 +412,7 @@ private fun ImageBrowserScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surfaceContainer),
     ) {
-        val modeSwitchSpatialSpec = yumePageSpatialSpringSpec()
+        val modeSwitchSpatialSpec = yumePageSpatialSpec()
         val contentBackgroundOffsetPx = with(density) { topBarHeight.roundToPx() }
         Box(
             modifier = Modifier
@@ -2039,7 +2039,7 @@ fun ImageViewerRoute(
         return true
     }
 
-    suspend fun closeWithSpring(trigger: CloseTrigger, initialProgress: Float, startRectOverride: Rect? = null) {
+    suspend fun closeWithTween(trigger: CloseTrigger, initialProgress: Float, startRectOverride: Rect? = null) {
         val started = startCloseTransition(
             trigger = trigger,
             initialProgress = initialProgress,
@@ -2254,7 +2254,7 @@ fun ImageViewerRoute(
             (!isTransitionRunning || isOpeningTransition),
     ) {
         scope.launch {
-            closeWithSpring(trigger = CloseTrigger.BackPress, initialProgress = 0f)
+            closeWithTween(trigger = CloseTrigger.BackPress, initialProgress = 0f)
         }
     }
 

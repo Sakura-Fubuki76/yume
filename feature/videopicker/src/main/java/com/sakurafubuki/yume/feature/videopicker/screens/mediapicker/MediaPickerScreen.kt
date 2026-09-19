@@ -104,7 +104,7 @@ import com.sakurafubuki.yume.core.ui.components.NextTopAppBar
 import com.sakurafubuki.yume.core.ui.composables.PermissionMissingView
 import com.sakurafubuki.yume.core.ui.designsystem.NextIcons
 import com.sakurafubuki.yume.core.ui.extensions.copy
-import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpringSpec
+import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpec
 import com.sakurafubuki.yume.core.ui.preview.DayNightPreview
 import com.sakurafubuki.yume.core.ui.preview.VideoPickerPreviewParameterProvider
 import com.sakurafubuki.yume.core.ui.theme.YumeTheme
@@ -531,7 +531,7 @@ internal fun MediaPickerScreen(
         },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) { scaffoldPadding ->
-        val modeSwitchSpatialSpec = yumePageSpatialSpringSpec()
+        val modeSwitchSpatialSpec = yumePageSpatialSpec()
         val contentScaffoldPadding = scaffoldPadding.copy(bottom = 0.dp)
         AnimatedContent(
             targetState = uiState.mode,

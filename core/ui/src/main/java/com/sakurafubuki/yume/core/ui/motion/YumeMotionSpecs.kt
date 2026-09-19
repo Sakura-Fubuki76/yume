@@ -1,24 +1,19 @@
 package com.sakurafubuki.yume.core.ui.motion
 
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.FiniteAnimationSpec
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.unit.IntOffset
 
-fun yumePageSpatialSpringSpec(): FiniteAnimationSpec<IntOffset> = spring(
-    dampingRatio = YUME_PAGE_SPATIAL_DAMPING_RATIO,
-    stiffness = YUME_PAGE_SPATIAL_STIFFNESS,
-    visibilityThreshold = YUME_PAGE_SPATIAL_VISIBILITY_THRESHOLD,
+val YumeTransitionEasing = FastOutSlowInEasing
+const val YUME_PAGE_DURATION_MS = 300
+
+fun yumePageSpatialSpec(): FiniteAnimationSpec<IntOffset> = tween(
+    durationMillis = YUME_PAGE_DURATION_MS,
+    easing = YumeTransitionEasing,
 )
 
-fun yumePageEffectsSpringSpec(): FiniteAnimationSpec<Float> = spring(
-    dampingRatio = YUME_PAGE_EFFECTS_DAMPING_RATIO,
-    stiffness = YUME_PAGE_EFFECTS_STIFFNESS,
-    visibilityThreshold = YUME_PAGE_EFFECTS_VISIBILITY_THRESHOLD,
+fun yumePageEffectsSpec(): FiniteAnimationSpec<Float> = tween(
+    durationMillis = YUME_PAGE_DURATION_MS,
+    easing = YumeTransitionEasing,
 )
-
-private const val YUME_PAGE_SPATIAL_DAMPING_RATIO = 0.86f
-private const val YUME_PAGE_SPATIAL_STIFFNESS = 300f
-private const val YUME_PAGE_EFFECTS_DAMPING_RATIO = 1f
-private const val YUME_PAGE_EFFECTS_STIFFNESS = 520f
-private const val YUME_PAGE_EFFECTS_VISIBILITY_THRESHOLD = 0.02f
-private val YUME_PAGE_SPATIAL_VISIBILITY_THRESHOLD = IntOffset(4, 4)
