@@ -61,6 +61,7 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
                         streamingMaxBufferMs = it.streamingMaxBufferMs,
                         streamingBufferForPlaybackMs = it.streamingBufferForPlaybackMs,
                         streamingBufferForPlaybackAfterRebufferMs = it.streamingBufferForPlaybackAfterRebufferMs,
+                        streamingBackBufferMs = it.streamingBackBufferMs,
                         streamingCacheSizeMb = it.streamingCacheSizeMb,
                         imageBrowserThumbnailSizePx = ApplicationPreferences.normalizeImageBrowserThumbnailSizePx(
                             it.imageBrowserThumbnailSizePx,
@@ -101,6 +102,7 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
             is MediaLibraryPreferencesUiEvent.UpdateStreamingMaxBufferMs -> setStreamingMaxBufferMs(event.value)
             is MediaLibraryPreferencesUiEvent.UpdateStreamingBufferForPlaybackMs -> setStreamingBufferForPlaybackMs(event.value)
             is MediaLibraryPreferencesUiEvent.UpdateStreamingBufferForPlaybackAfterRebufferMs -> setStreamingBufferForPlaybackAfterRebufferMs(event.value)
+            is MediaLibraryPreferencesUiEvent.UpdateStreamingBackBufferMs -> setStreamingBackBufferMs(event.value)
             is MediaLibraryPreferencesUiEvent.UpdateStreamingCacheSize -> setStreamingCacheSize(event.sizeMb)
             is MediaLibraryPreferencesUiEvent.UpdateImageBrowserThumbnailSizePx -> setImageBrowserThumbnailSizePx(event.sizePx)
             is MediaLibraryPreferencesUiEvent.UpdateImageBrowserPreloadPageCount -> setImageBrowserPreloadPageCount(event.count)
@@ -239,6 +241,18 @@ class MediaLibraryPreferencesViewModel @Inject constructor(
         }
     }
 
+    private fun setStreamingBackBufferMs(value: Int) {
+        viewModelScope.launch {
+            val normalized = value.coerceIn(
+                ApplicationPreferences.MIN_STREAMING_BACK_BUFFER_MS,
+                ApplicationPreferences.MAX_STREAMING_BACK_BUFFER_MS,
+            )
+            preferencesRepository.updateApplicationPreferences {
+                it.copy(streamingBackBufferMs = normalized)
+            }
+        }
+    }
+
     private fun setStreamingCacheSize(sizeMb: Int) {
         viewModelScope.launch {
             val normalized = sizeMb.coerceIn(
@@ -302,6 +316,7 @@ data class MediaLibraryPreferencesUiState(
     val streamingMaxBufferMs: Int = ApplicationPreferences.DEFAULT_STREAMING_MAX_BUFFER_MS,
     val streamingBufferForPlaybackMs: Int = ApplicationPreferences.DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_MS,
     val streamingBufferForPlaybackAfterRebufferMs: Int = ApplicationPreferences.DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+    val streamingBackBufferMs: Int = ApplicationPreferences.DEFAULT_STREAMING_BACK_BUFFER_MS,
     val streamingCacheSizeMb: Int = ApplicationPreferences.DEFAULT_STREAMING_CACHE_SIZE_MB,
     val currentImageCacheUsageMb: Long = 0,
     val imageBrowserThumbnailSizePx: Int = ApplicationPreferences.DEFAULT_IMAGE_BROWSER_THUMBNAIL_SIZE_PX,
@@ -321,6 +336,7 @@ sealed interface MediaLibraryPreferencesUiEvent {
     data class UpdateStreamingMaxBufferMs(val value: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateStreamingBufferForPlaybackMs(val value: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateStreamingBufferForPlaybackAfterRebufferMs(val value: Int) : MediaLibraryPreferencesUiEvent
+    data class UpdateStreamingBackBufferMs(val value: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateStreamingCacheSize(val sizeMb: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateImageBrowserThumbnailSizePx(val sizePx: Int) : MediaLibraryPreferencesUiEvent
     data class UpdateImageBrowserPreloadPageCount(val count: Int) : MediaLibraryPreferencesUiEvent

@@ -2,8 +2,6 @@ package com.sakurafubuki.yume.feature.videopicker.screens.mediapicker
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
@@ -45,22 +43,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButtonMenu
-import androidx.compose.material3.FloatingActionButtonMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.ToggleFloatingActionButton
-import androidx.compose.material3.ToggleFloatingActionButtonDefaults.animateIcon
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -98,7 +90,6 @@ import com.sakurafubuki.yume.core.model.Video
 import com.sakurafubuki.yume.core.ui.R
 import com.sakurafubuki.yume.core.ui.base.DataState
 import com.sakurafubuki.yume.core.ui.components.CancelButton
-import com.sakurafubuki.yume.core.ui.components.DoneButton
 import com.sakurafubuki.yume.core.ui.components.NextDialog
 import com.sakurafubuki.yume.core.ui.components.NextTopAppBar
 import com.sakurafubuki.yume.core.ui.composables.PermissionMissingView
@@ -197,16 +188,10 @@ internal fun MediaPickerScreen(
     val permissionGranted = permissionState.permissions.any { it.status.isGranted }
     val showPermissionRationale = permissionState.permissions.any { it.status.shouldShowRationale }
     val lazyGridState = rememberLazyGridState()
-    val selectVideoFileLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
-        onResult = { it?.let { onPlayVideo(it) } },
-    )
 
-    var isFabExpanded by rememberSaveable { mutableStateOf(false) }
     var showQuickSettingsDialog by rememberSaveable { mutableStateOf(false) }
     var showCloudServerSelectorDialog by rememberSaveable { mutableStateOf(false) }
     var showModeSwitchDialog by rememberSaveable { mutableStateOf(false) }
-    var showUrlDialog by rememberSaveable { mutableStateOf(false) }
     var showStorageMenu by rememberSaveable { mutableStateOf(false) }
     val selectedCloudServer = uiState.webDavServers.firstOrNull { it.id == uiState.selectedCloudServerId }
         ?: uiState.webDavServers.firstOrNull()
@@ -214,10 +199,6 @@ internal fun MediaPickerScreen(
     val canNavigateCloudUp = uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD &&
         selectedCloudServer != null &&
         (uiState.selectedCloudServerId != null || normalizePath(uiState.cloudPath) != "/")
-    val isAtHome = when (uiState.mode) {
-        com.sakurafubuki.yume.core.model.MediaMode.LOCAL -> uiState.folderName == null
-        com.sakurafubuki.yume.core.model.MediaMode.CLOUD -> !canNavigateCloudUp
-    }
 
     var showRenameActionFor: Video? by rememberSaveable { mutableStateOf(null) }
     var showInfoActionFor: Video? by rememberSaveable { mutableStateOf(null) }
@@ -436,99 +417,6 @@ internal fun MediaPickerScreen(
                 },
             )
         },
-        floatingActionButton = {
-            if (selectionManager.isInSelectionMode || !isAtHome) return@Scaffold
-
-            FloatingActionButtonMenu(
-                expanded = isFabExpanded,
-                button = {
-                    ToggleFloatingActionButton(
-                        checked = isFabExpanded,
-                        onCheckedChange = { isFabExpanded = !isFabExpanded },
-                    ) {
-                        val icon by remember {
-                            derivedStateOf {
-                                if (checkedProgress > 0.5f) NextIcons.Close else NextIcons.Play
-                            }
-                        }
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = null,
-                            modifier = Modifier.animateIcon(checkedProgress = { checkedProgress }),
-                        )
-                    }
-                },
-            ) {
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        isFabExpanded = false
-                        showUrlDialog = true
-                    },
-                    icon = {
-                        Icon(
-                            imageVector = NextIcons.Link,
-                            contentDescription = null,
-                        )
-                    },
-                    text = {
-                        Text(text = stringResource(id = R.string.open_network_stream))
-                    },
-                )
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        isFabExpanded = false
-                        selectVideoFileLauncher.launch("video/*")
-                    },
-                    icon = {
-                        Icon(
-                            imageVector = NextIcons.FileOpen,
-                            contentDescription = null,
-                        )
-                    },
-                    text = {
-                        Text(text = stringResource(id = R.string.open_local_video))
-                    },
-                )
-                FloatingActionButtonMenuItem(
-                    onClick = {
-                        isFabExpanded = false
-                        if (uiState.mode == com.sakurafubuki.yume.core.model.MediaMode.CLOUD) {
-                            val folder = (uiState.cloudDataState as? DataState.Success)?.value
-                            val videoToPlay = folder?.recentlyPlayedVideo ?: folder?.firstVideo
-                            if (videoToPlay != null) {
-                                val cloudFolder = folder ?: return@FloatingActionButtonMenuItem
-                                rememberCloudVideoPlaybackMetadata(videoToPlay)
-                                val playlist = cloudFolder.allMediaList.map { it.uriString.toUri() }
-                                val orderedPlaylist = orderPlaylistFromClickedItem(
-                                    clickedUri = videoToPlay.uriString.toUri(),
-                                    playlist = playlist,
-                                )
-                                if (orderedPlaylist.size > 1) {
-                                    onPlayVideos(trimCloudPlaylistForIntent(orderedPlaylist))
-                                } else {
-                                    onPlayVideo(videoToPlay.uriString.toUri())
-                                }
-                                return@FloatingActionButtonMenuItem
-                            }
-                            uiState.recentlyPlayedCloudUri?.let { onPlayVideo(it.toUri()) }
-                            return@FloatingActionButtonMenuItem
-                        }
-                        val folder = (uiState.mediaDataState as? DataState.Success)?.value ?: return@FloatingActionButtonMenuItem
-                        val videoToPlay = folder.recentlyPlayedVideo ?: folder.firstVideo ?: return@FloatingActionButtonMenuItem
-                        onPlayVideo(videoToPlay.uriString.toUri())
-                    },
-                    icon = {
-                        Icon(
-                            imageVector = NextIcons.History,
-                            contentDescription = null,
-                        )
-                    },
-                    text = {
-                        Text(text = stringResource(id = R.string.recently_played))
-                    },
-                )
-            }
-        },
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) { scaffoldPadding ->
         val modeSwitchSpatialSpec = yumePageSpatialSpec()
@@ -642,24 +530,8 @@ internal fun MediaPickerScreen(
         }
     }
 
-    BackHandler(enabled = isFabExpanded) {
-        isFabExpanded = false
-    }
-
     BackHandler(enabled = selectionManager.isInSelectionMode) {
         selectionManager.exitSelectionMode()
-    }
-
-    LaunchedEffect(lazyGridState.isScrollInProgress) {
-        if (isFabExpanded && lazyGridState.isScrollInProgress) {
-            isFabExpanded = false
-        }
-    }
-
-    LaunchedEffect(selectionManager.isInSelectionMode) {
-        if (selectionManager.isInSelectionMode) {
-            isFabExpanded = false
-        }
     }
 
     if (showQuickSettingsDialog) {
@@ -700,13 +572,6 @@ internal fun MediaPickerScreen(
                 }
             },
             dismissButton = { CancelButton(onClick = { showModeSwitchDialog = false }) },
-        )
-    }
-
-    if (showUrlDialog) {
-        NetworkUrlDialog(
-            onDismiss = { showUrlDialog = false },
-            onDone = { onPlayVideo(it.toUri()) },
         )
     }
 
@@ -1060,35 +925,6 @@ private fun DeleteConfirmationDialog(
                 style = MaterialTheme.typography.titleSmall,
             )
         },
-    )
-}
-
-@Composable
-private fun NetworkUrlDialog(
-    onDismiss: () -> Unit,
-    onDone: (String) -> Unit,
-) {
-    var url by rememberSaveable { mutableStateOf("") }
-    NextDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.network_stream)) },
-        content = {
-            Text(text = stringResource(R.string.enter_a_network_url))
-            Spacer(modifier = Modifier.height(10.dp))
-            OutlinedTextField(
-                value = url,
-                onValueChange = { url = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text(text = stringResource(R.string.example_url)) },
-            )
-        },
-        confirmButton = {
-            DoneButton(
-                enabled = url.isNotBlank(),
-                onClick = { onDone(url) },
-            )
-        },
-        dismissButton = { CancelButton(onClick = onDismiss) },
     )
 }
 

@@ -18,6 +18,11 @@ val appDestinations: List<AppDestination> = listOf(
         labelRes = R.string.bottom_nav_video,
     ),
     AppDestination(
+        screen = Screen.Recent,
+        icon = NextIcons.History,
+        labelRes = R.string.bottom_nav_recent,
+    ),
+    AppDestination(
         screen = Screen.Image,
         icon = NextIcons.Image,
         labelRes = R.string.bottom_nav_images,

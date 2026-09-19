@@ -7,6 +7,7 @@ import android.content.Intent
 import android.media.audiofx.LoudnessEnhancer
 import android.net.Uri
 import android.os.Bundle
+import android.os.Debug
 import androidx.annotation.OptIn
 import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
@@ -41,11 +42,14 @@ import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime
 import androidx.media3.exoplayer.analytics.PlayerId
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.source.TrackGroupArray
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.trackselection.ExoTrackSelection
 import androidx.media3.exoplayer.upstream.Allocator
 import androidx.media3.exoplayer.upstream.DefaultAllocator
+import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.session.CommandButton
 import androidx.media3.session.CommandButton.ICON_UNDEFINED
 import androidx.media3.session.MediaSession
@@ -144,11 +148,35 @@ private const val PLAYER_MEDIA_ITEM_METADATA_CONCURRENCY = 4
 private const val STREAMING_CACHE_DIR = "streaming_media"
 private const val SIGN_REFRESH_HEADER = "X-Yume-Sign-Refreshed"
 private const val NEXT_MEDIA_PREBUFFER_BYTES = 2L * 1024L * 1024L
+private const val MIN_LOAD_BYTES_FOR_LOG = 512 * 1024
+private const val MEM_DUMP_THRESHOLD_MB = 380
+
+// Adaptive in-memory buffer cap: aim for ~60 s of content at the bandwidth the
+// meter measures, clamped so slow streams still get a useful window and fast ones
+// cannot exhaust the (largeHeap-raised) process heap. While the meter is still
+// cold (< 2 Mbps initial estimate) fall back to 64 MB.
+private const val ADAPTIVE_BUFFER_TARGET_SECONDS = 60
+private const val ADAPTIVE_BUFFER_MIN_BYTES = 32 * 1024 * 1024
+private const val ADAPTIVE_BUFFER_MAX_BYTES = 128 * 1024 * 1024
+private const val ADAPTIVE_BUFFER_FALLBACK_BYTES = 64 * 1024 * 1024
+private const val ADAPTIVE_BUFFER_MIN_KNOWN_BITRATE = 2_000_000L
 
 // After a seek the player only fills its (small) scrub buffer and stops loading.
-// On unlimited Wi-Fi we keep downloading the range after the seek target so
-// scrubbing back / stepping around stays instant. Bounded by cache eviction.
-private const val SEEK_CONTINUATION_WINDOW_MS = 30L * 60L * 1000L
+// We keep downloading the range after the seek target so scrubbing back / stepping
+// around stays instant. How far ahead we prefetch is adaptive to the server's
+// measured throughput relative to the video bitrate:
+//  - very fast servers (>= FAST_RATIO x bitrate): live refetch is cheap, a short
+//    window is enough and a large one would waste bandwidth and cache space
+//  - borderline servers (SLOW_RATIO .. FAST_RATIO): scale the window with headroom
+//  - slow servers (< SLOW_RATIO): keep a minimal window to not compete with playback
+private const val SEEK_CONTINUATION_FAST_RATIO = 10.0
+private const val SEEK_CONTINUATION_SLOW_RATIO = 2.0
+private const val SEEK_CONTINUATION_FAST_WINDOW_MS = 2L * 60L * 1000L
+private const val SEEK_CONTINUATION_SLOW_WINDOW_MS = 60L * 1000L
+private const val SEEK_CONTINUATION_WINDOW_PER_RATIO_MS = 60L * 1000L
+private const val SEEK_CONTINUATION_MAX_WINDOW_MS = 30L * 60L * 1000L
+private const val SEEK_CONTINUATION_WARMUP_BYTES = 4L * 1024L * 1024L
+private const val SEEK_CONTINUATION_CHUNK_BYTES = 8L * 1024L * 1024L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_TTL_MS = 5 * 60 * 1000L
 private const val REMOTE_SUBTITLE_PROBE_CACHE_MAX_ENTRIES = 64
 private const val REMOTE_SUBTITLE_PROBE_DISK_DIR = "remote_subtitle_probe"
@@ -236,6 +264,27 @@ class PlayerService : MediaSessionService() {
 
     @Volatile
     private var hdrMaxLuma: Float? = null
+
+    @Volatile
+    private var bufferingStartedAt: Long? = null
+
+    /**
+     * Diagnostic only: logs download throughput per completed media load so buffering
+     * efficiency can be inspected from logcat (see "load:" lines).
+     */
+    private val throughputListener = object : AnalyticsListener {
+        override fun onLoadCompleted(
+            eventTime: EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData,
+        ) {
+            val bytes = loadEventInfo.bytesLoaded
+            if (bytes < MIN_LOAD_BYTES_FOR_LOG) return
+            val loadMs = loadEventInfo.loadDurationMs.coerceAtLeast(1L)
+            val mbps = bytes * 8.0 / loadMs / 1000.0
+            Logger.i(TAG, "load: %.2f Mbps, %d KB in %d ms".format(mbps, bytes / 1024, loadMs))
+        }
+    }
 
     private val hdrMetadataListener = object : AnalyticsListener {
         override fun onVideoInputFormatChanged(eventTime: EventTime, format: Format, decoderReuseEvaluation: DecoderReuseEvaluation?) {
@@ -425,6 +474,31 @@ class PlayerService : MediaSessionService() {
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             super.onPlaybackStateChanged(playbackState)
+
+            // Diagnostic: time spent in BUFFERING and the buffered window when it resolves.
+            if (playbackState == Player.STATE_BUFFERING) {
+                bufferingStartedAt = System.currentTimeMillis()
+            }
+            if (playbackState == Player.STATE_READY) {
+                bufferingStartedAt?.let { startedAt ->
+                    bufferingStartedAt = null
+                    mediaSession?.player?.let { player ->
+                        val runtime = Runtime.getRuntime()
+                        val memoryInfo = Debug.MemoryInfo()
+                        Debug.getMemoryInfo(memoryInfo)
+                        val heapUsedMb = (runtime.totalMemory() - runtime.freeMemory()) / 1024 / 1024
+                        Logger.i(
+                            TAG,
+                            "buffer: ready after ${System.currentTimeMillis() - startedAt}ms, " +
+                                "pos=${player.currentPosition}ms, buffered=${player.bufferedPosition}ms, dur=${player.duration}ms, " +
+                                "heapUsed=${heapUsedMb}MB, " +
+                                "allocated=${loadControl?.totalAllocatedBytes?.div(1024 * 1024)}MB, " +
+                                "pss=${memoryInfo.totalPss / 1024}MB(dalvik=${memoryInfo.dalvikPss / 1024}MB " +
+                                "native=${memoryInfo.nativePss / 1024}MB other=${memoryInfo.otherPss / 1024}MB)",
+                        )
+                    }
+                }
+            }
 
             if (playbackState == Player.STATE_ENDED || playbackState == Player.STATE_IDLE) {
                 mediaSession?.player?.trackSelectionParameters = TrackSelectionParameters.DEFAULT
@@ -724,12 +798,16 @@ class PlayerService : MediaSessionService() {
 
     /**
      * After a scrub ends the player fills only the small scrub buffer and stops loading.
-     * Continue downloading [SEEK_CONTINUATION_WINDOW_MS] of content from the seek target
-     * into the streaming cache so later seeks inside that window play instantly.
+     * Continue downloading a window of content from the seek target into the streaming
+     * cache so later seeks inside that window play instantly. The window size adapts to
+     * the measured server throughput relative to the video bitrate (see the
+     * SEEK_CONTINUATION_* constants), and downloads happen in bounded chunks so a
+     * cancelled job (the next scrub) stops on a chunk boundary.
      */
     private fun startSeekContinuationCache() {
         continuationCacheJob?.cancel()
         val player = mediaSession?.player ?: return
+        if (streamingCacheDataSourceFactory == null) return
         val url = player.currentMediaItem?.mediaId ?: return
         if (!url.isHttpUrl()) return
         val positionMs = player.currentPosition
@@ -739,12 +817,33 @@ class PlayerService : MediaSessionService() {
         if (totalLength <= 0L) return
 
         val startByte = (totalLength.toDouble() * positionMs / durationMs).toLong().coerceAtLeast(0L)
-        val endFraction = (positionMs + SEEK_CONTINUATION_WINDOW_MS).coerceAtMost(durationMs)
-        val endByte = (totalLength.toDouble() * endFraction / durationMs).toLong().coerceAtMost(totalLength)
-        val length = (endByte - startByte).coerceAtLeast(1L)
+        if (startByte >= totalLength) return
 
         continuationCacheJob = serviceScope.launch(Dispatchers.IO) {
-            cacheHttpRange(url, position = startByte, length = length)
+            // Warm up a first chunk to measure achievable throughput.
+            val warmupLength = SEEK_CONTINUATION_WARMUP_BYTES.coerceAtMost(totalLength - startByte)
+            val warmedAt = System.currentTimeMillis()
+            cacheHttpRange(url, position = startByte, length = warmupLength)
+            val warmupMs = (System.currentTimeMillis() - warmedAt).coerceAtLeast(1L)
+            val warmupBitsPerSec = warmupLength.toDouble() * 8.0 / (warmupMs / 1000.0)
+            val bitrate = totalLength.toDouble() * 8.0 / (durationMs / 1000.0)
+            val ratio = warmupBitsPerSec / bitrate
+
+            val windowMs = when {
+                ratio >= SEEK_CONTINUATION_FAST_RATIO -> SEEK_CONTINUATION_FAST_WINDOW_MS
+                ratio < SEEK_CONTINUATION_SLOW_RATIO -> SEEK_CONTINUATION_SLOW_WINDOW_MS
+                else -> (ratio * SEEK_CONTINUATION_WINDOW_PER_RATIO_MS).toLong()
+                    .coerceIn(SEEK_CONTINUATION_SLOW_WINDOW_MS, SEEK_CONTINUATION_MAX_WINDOW_MS)
+            }
+            val endFraction = (positionMs + windowMs).coerceAtMost(durationMs)
+            val endByte = (totalLength.toDouble() * endFraction / durationMs).toLong().coerceAtMost(totalLength)
+
+            var position = startByte + warmupLength
+            while (position < endByte) {
+                val chunkLength = SEEK_CONTINUATION_CHUNK_BYTES.coerceAtMost(endByte - position)
+                cacheHttpRange(url, position = position, length = chunkLength)
+                position += chunkLength
+            }
         }
     }
 
@@ -1092,16 +1191,23 @@ class PlayerService : MediaSessionService() {
             playbackDataSourceFactory ?: upstreamFactory,
         )
 
+        // Shared instance so the adaptive buffer gate and the player see the same
+        // throughput estimate (the player also feeds it to track selection).
+        val bandwidthMeter = DefaultBandwidthMeter.Builder(applicationContext).build()
+
         val loadControl = ScrubbingAwareLoadControl(
             allocator = DefaultAllocator(true, appPreferences.streamingAllocatorChunkSizeKb * 1024),
+            bandwidthMeter = bandwidthMeter,
             normalMinBufferMs = appPreferences.streamingMinBufferMs,
             normalMaxBufferMs = appPreferences.streamingMaxBufferMs,
             normalBufferForPlaybackMs = appPreferences.streamingBufferForPlaybackMs,
             normalBufferForPlaybackAfterRebufferMs = appPreferences.streamingBufferForPlaybackAfterRebufferMs,
+            backBufferMs = appPreferences.streamingBackBufferMs,
         )
         this.loadControl = loadControl
 
         val player = ExoPlayer.Builder(applicationContext)
+            .setBandwidthMeter(bandwidthMeter)
             .setRenderersFactory(renderersFactory)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
@@ -1121,6 +1227,7 @@ class PlayerService : MediaSessionService() {
                 Logger.i(TAG, "DownscalePre=${playerPreferences.anime4KAutoDownscalePreMode} Upscale=${playerPreferences.anime4KUpscaleMode}")
                 it.setVideoEffects(effects)
                 it.addAnalyticsListener(hdrMetadataListener)
+                it.addAnalyticsListener(throughputListener)
                 it.addListener(playbackStateListener)
                 it.pauseAtEndOfMediaItems = !playerPreferences.autoplay
                 it.repeatMode = when (playerPreferences.loopMode) {
@@ -1187,6 +1294,7 @@ class PlayerService : MediaSessionService() {
             player.stop()
             (player as? ExoPlayer)?.removeAnalyticsListener(hdrMetadataListener)
             player.removeListener(playbackStateListener)
+            (player as? ExoPlayer)?.removeAnalyticsListener(throughputListener)
             player.release()
             release()
             mediaSession = null
@@ -2023,11 +2131,13 @@ private fun PlayerPreferences.videoEffectsKey(): List<Any> = listOf(
 
 @OptIn(UnstableApi::class)
 private class ScrubbingAwareLoadControl(
-    allocator: DefaultAllocator,
+    private val allocator: DefaultAllocator,
+    private val bandwidthMeter: DefaultBandwidthMeter,
     normalMinBufferMs: Int,
     normalMaxBufferMs: Int,
     normalBufferForPlaybackMs: Int,
     normalBufferForPlaybackAfterRebufferMs: Int,
+    backBufferMs: Int,
 ) : LoadControl {
 
     @Volatile
@@ -2041,6 +2151,13 @@ private class ScrubbingAwareLoadControl(
             normalBufferForPlaybackMs,
             normalBufferForPlaybackAfterRebufferMs,
         )
+        // Keep a window behind the playhead in RAM so re-scrubbing the last minute(s)
+        // never hits the network. 0 disables the back buffer. The second argument
+        // retains the buffer from the last keyframe before the window for instant seeks.
+        .setBackBuffer(backBufferMs, true)
+        // The builder's byte cap only serves as a hard ceiling; the adaptive gate in
+        // shouldContinueLoading below is what actually scales the window with bandwidth.
+        .setTargetBufferBytes(ADAPTIVE_BUFFER_MAX_BYTES)
         .build()
 
     private val scrub = DefaultLoadControl.Builder()
@@ -2070,7 +2187,41 @@ private class ScrubbingAwareLoadControl(
 
     override fun shouldStartPlayback(parameters: LoadControl.Parameters): Boolean = delegate.shouldStartPlayback(parameters)
 
-    override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean = delegate.shouldContinueLoading(parameters)
+    /**
+     * Stops loading once the total allocated buffer (forward + back) reaches the
+     * bandwidth-adaptive byte target. The target tracks measured throughput so a
+     * fast WebDAV server gets a large window (fewer rebuffers) while a slow one does
+     * not waste RAM on an unbounded time-based window.
+     */
+    override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean {
+        if (allocator.totalBytesAllocated >= computeAdaptiveTargetBytes()) return false
+        return delegate.shouldContinueLoading(parameters)
+    }
+
+    val totalAllocatedBytes: Int
+        get() = allocator.totalBytesAllocated
+
+    @Volatile
+    private var lastLoggedTargetBytes: Int = -1
+
+    private fun computeAdaptiveTargetBytes(): Int {
+        val bitrate = bandwidthMeter.bitrateEstimate
+        val target = if (bitrate < ADAPTIVE_BUFFER_MIN_KNOWN_BITRATE) {
+            ADAPTIVE_BUFFER_FALLBACK_BYTES
+        } else {
+            (bitrate / 8 * ADAPTIVE_BUFFER_TARGET_SECONDS)
+                .coerceIn(
+                    ADAPTIVE_BUFFER_MIN_BYTES.toLong(),
+                    ADAPTIVE_BUFFER_MAX_BYTES.toLong(),
+                )
+                .toInt()
+        }
+        if (target != lastLoggedTargetBytes) {
+            lastLoggedTargetBytes = target
+            Logger.i(TAG, "buffer: adaptive cap=${target / (1024 * 1024)}MB (bitrate=${bitrate / 1000} kbps)")
+        }
+        return target
+    }
 
     override fun getAllocator(playerId: PlayerId): Allocator = delegate.getAllocator(playerId)
 

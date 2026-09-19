@@ -11,6 +11,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.navigation3.runtime.NavKey
 import com.sakurafubuki.yume.navigation3.ImageNavDisplay
 import com.sakurafubuki.yume.navigation3.MediaNavDisplay
+import com.sakurafubuki.yume.navigation3.RecentNavDisplay
 import com.sakurafubuki.yume.navigation3.SettingsNavDisplay
 import com.sakurafubuki.yume.navigation3.rememberYumeNavEntryDecorators
 
@@ -20,6 +21,7 @@ fun AppNavHost(
     pagerState: PagerState,
     mediaBackStack: MutableList<NavKey>,
     imageBackStack: MutableList<NavKey>,
+    recentBackStack: MutableList<NavKey>,
     settingsBackStack: MutableList<NavKey>,
     onNavigateToSettingsTab: () -> Unit,
     userScrollEnabled: Boolean,
@@ -29,6 +31,7 @@ fun AppNavHost(
     // Keep decorators outside the page content so tab switches retain entry state/VMs.
     val mediaDecorators = rememberYumeNavEntryDecorators()
     val imageDecorators = rememberYumeNavEntryDecorators()
+    val recentDecorators = rememberYumeNavEntryDecorators()
     val settingsDecorators = rememberYumeNavEntryDecorators()
     HorizontalPager(
         state = pagerState,
@@ -49,6 +52,12 @@ fun AppNavHost(
                     onNavigateToSettings = onNavigateToSettingsTab,
                     modifier = Modifier.fillMaxSize(),
                     entryDecorators = imageDecorators,
+                )
+                Screen.Recent -> RecentNavDisplay(
+                    context = context,
+                    backStack = recentBackStack,
+                    modifier = Modifier.fillMaxSize(),
+                    entryDecorators = recentDecorators,
                 )
                 Screen.Settings -> SettingsNavDisplay(
                     backStack = settingsBackStack,

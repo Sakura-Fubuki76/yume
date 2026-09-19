@@ -40,6 +40,7 @@ data class ApplicationPreferences(
     val streamingMaxBufferMs: Int = DEFAULT_STREAMING_MAX_BUFFER_MS,
     val streamingBufferForPlaybackMs: Int = DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_MS,
     val streamingBufferForPlaybackAfterRebufferMs: Int = DEFAULT_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS,
+    val streamingBackBufferMs: Int = DEFAULT_STREAMING_BACK_BUFFER_MS,
     val streamingAllocatorChunkSizeKb: Int = DEFAULT_STREAMING_ALLOCATOR_CHUNK_SIZE_KB,
     val streamingCacheSizeMb: Int = DEFAULT_STREAMING_CACHE_SIZE_MB,
     val imageQuality: ImageQuality = ImageQuality.HIGH,
@@ -67,6 +68,9 @@ data class ApplicationPreferences(
         const val MAX_STREAMING_BUFFER_FOR_PLAYBACK_MS = 10_000
         const val MIN_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 1_000
         const val MAX_STREAMING_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS = 15_000
+        const val DEFAULT_STREAMING_BACK_BUFFER_MS = 15_000
+        const val MIN_STREAMING_BACK_BUFFER_MS = 0
+        const val MAX_STREAMING_BACK_BUFFER_MS = 300_000
         const val DEFAULT_STREAMING_ALLOCATOR_CHUNK_SIZE_KB = 2048
         const val MIN_STREAMING_ALLOCATOR_CHUNK_SIZE_KB = 64
         const val MAX_STREAMING_ALLOCATOR_CHUNK_SIZE_KB = 8192
