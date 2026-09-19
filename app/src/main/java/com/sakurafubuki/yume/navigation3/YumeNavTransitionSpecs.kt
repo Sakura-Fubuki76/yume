@@ -15,8 +15,8 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.scene.Scene
 import androidx.navigationevent.NavigationEvent
-import com.sakurafubuki.yume.core.ui.motion.yumePageEffectsSpringSpec
-import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpringSpec
+import com.sakurafubuki.yume.core.ui.motion.yumePageEffectsSpec
+import com.sakurafubuki.yume.core.ui.motion.yumePageSpatialSpec
 
 data class YumeNavTransitionSpecs(
     val transitionSpec: AnimatedContentTransitionScope<Scene<NavKey>>.() -> ContentTransform,
@@ -28,8 +28,8 @@ data class YumeNavTransitionSpecs(
 
 @Composable
 fun yumeNavTransitionSpecs(): YumeNavTransitionSpecs {
-    val spatialSpec = yumePageSpatialSpringSpec()
-    val effectsSpec = yumePageEffectsSpringSpec()
+    val spatialSpec = yumePageSpatialSpec()
+    val effectsSpec = yumePageEffectsSpec()
 
     return YumeNavTransitionSpecs(
         transitionSpec = {
@@ -82,7 +82,7 @@ fun yumeNavTransitionSpecs(): YumeNavTransitionSpecs {
     )
 }
 
-private const val YUME_NAV_POP_OFFSET_RATIO = 0.3f
+private const val YUME_NAV_POP_OFFSET_RATIO = 0.25f
 private const val YUME_NAV_PREDICTIVE_DURATION_MS = 220
 private const val YUME_NAV_PREDICTIVE_SCALE_DELAY_MS = 30
 private const val YUME_NAV_PREDICTIVE_SCALE = 0.9f

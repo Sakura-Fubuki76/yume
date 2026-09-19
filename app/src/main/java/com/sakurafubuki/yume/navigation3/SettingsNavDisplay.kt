@@ -2,6 +2,7 @@ package com.sakurafubuki.yume.navigation3
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.navigation3.runtime.NavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
@@ -25,6 +26,7 @@ import com.sakurafubuki.yume.settings.screens.thumbnail.ThumbnailPreferencesScre
 fun SettingsNavDisplay(
     backStack: MutableList<NavKey>,
     modifier: Modifier = Modifier,
+    entryDecorators: List<NavEntryDecorator<NavKey>> = rememberYumeNavEntryDecorators(),
 ) {
     val navigateUp: () -> Unit = { backStack.popOrFalse() }
     val transitionSpecs = yumeNavTransitionSpecs()
@@ -33,7 +35,7 @@ fun SettingsNavDisplay(
         backStack = backStack,
         modifier = modifier,
         onBack = navigateUp,
-        entryDecorators = rememberYumeNavEntryDecorators(),
+        entryDecorators = entryDecorators,
         transitionSpec = transitionSpecs.transitionSpec,
         popTransitionSpec = transitionSpecs.popTransitionSpec,
         predictivePopTransitionSpec = transitionSpecs.predictivePopTransitionSpec,

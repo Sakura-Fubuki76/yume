@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.navigation3.runtime.NavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.ui.NavDisplay
@@ -20,6 +21,7 @@ fun MediaNavDisplay(
     backStack: MutableList<NavKey>,
     onNavigateToSettings: () -> Unit,
     modifier: Modifier = Modifier,
+    entryDecorators: List<NavEntryDecorator<NavKey>> = rememberYumeNavEntryDecorators(),
 ) {
     val transitionSpecs = yumeNavTransitionSpecs()
 
@@ -27,7 +29,7 @@ fun MediaNavDisplay(
         backStack = backStack,
         modifier = modifier.fillMaxSize(),
         onBack = { backStack.popOrFalse() },
-        entryDecorators = rememberYumeNavEntryDecorators(),
+        entryDecorators = entryDecorators,
         transitionSpec = transitionSpecs.transitionSpec,
         popTransitionSpec = transitionSpecs.popTransitionSpec,
         predictivePopTransitionSpec = transitionSpecs.predictivePopTransitionSpec,

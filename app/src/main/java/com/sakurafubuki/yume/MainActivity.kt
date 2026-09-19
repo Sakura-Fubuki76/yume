@@ -11,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -57,6 +58,8 @@ import com.sakurafubuki.yume.core.ui.motion.OverlayContentState
 import com.sakurafubuki.yume.core.ui.motion.OverlayLayer
 import com.sakurafubuki.yume.core.ui.motion.SharedElementRegistry
 import com.sakurafubuki.yume.core.ui.motion.TransitionEngine
+import com.sakurafubuki.yume.core.ui.motion.YUME_PAGE_DURATION_MS
+import com.sakurafubuki.yume.core.ui.motion.YumeTransitionEasing
 import com.sakurafubuki.yume.core.ui.theme.YumeTheme
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerRoute
 import com.sakurafubuki.yume.feature.imagebrowser.ui.ImageViewerStore
@@ -64,6 +67,8 @@ import com.sakurafubuki.yume.navigation.AppAdaptiveNavBar
 import com.sakurafubuki.yume.navigation.AppAdaptiveNavigationContainer
 import com.sakurafubuki.yume.navigation.AppNavHost
 import com.sakurafubuki.yume.navigation.Screen
+import com.sakurafubuki.yume.navigation.pageToScreen
+import com.sakurafubuki.yume.navigation.screenToPage
 import com.sakurafubuki.yume.navigation3.ImageBrowserKey
 import com.sakurafubuki.yume.navigation3.MediaPickerKey
 import com.sakurafubuki.yume.navigation3.SettingsHomeKey
@@ -171,14 +176,13 @@ private fun MainScreen(
 
     val selectedScreen = pageToScreen(pagerState.currentPage)
     val imageViewerShowing = selectedScreen == Screen.Image && ImageViewerStore.isViewerShowing
-    val bottomBarVisible = !imageViewerShowing
+    val imageViewerImmersiveStatusBar = imageViewerShowing
     val isCurrentTabOnRoot = when (selectedScreen) {
         Screen.Video -> mediaBackStack.size == 1
         Screen.Image -> imageBackStack.size == 1
         Screen.Settings -> settingsBackStack.size == 1
     }
-    val tabSwipeEnabled = bottomBarVisible && isCurrentTabOnRoot
-    val imageViewerImmersiveStatusBar = imageViewerShowing
+    val tabSwipeEnabled = !imageViewerShowing && isCurrentTabOnRoot
 
     val transitionEngine = remember { TransitionEngine() }
     val sharedElementRegistry = remember { SharedElementRegistry() }
@@ -240,7 +244,10 @@ private fun MainScreen(
                     val targetPage = screenToPage(screen)
                     if (targetPage != pagerState.currentPage) {
                         scope.launch {
-                            pagerState.animateScrollToPage(targetPage)
+                            pagerState.animateScrollToPage(
+                                targetPage,
+                                animationSpec = tween(YUME_PAGE_DURATION_MS, easing = YumeTransitionEasing),
+                            )
                         }
                     }
                 },
@@ -255,7 +262,10 @@ private fun MainScreen(
                     settingsBackStack = settingsBackStack,
                     onNavigateToSettingsTab = {
                         scope.launch {
-                            pagerState.animateScrollToPage(screenToPage(Screen.Settings))
+                            pagerState.animateScrollToPage(
+                                screenToPage(Screen.Settings),
+                                animationSpec = tween(YUME_PAGE_DURATION_MS, easing = YumeTransitionEasing),
+                            )
                         }
                     },
                     userScrollEnabled = tabSwipeEnabled,
@@ -299,18 +309,6 @@ private fun MainScreen(
             OverlayLayer()
         }
     }
-}
-
-private fun pageToScreen(page: Int): Screen = when (page) {
-    0 -> Screen.Video
-    1 -> Screen.Image
-    else -> Screen.Settings
-}
-
-private fun screenToPage(screen: Screen): Int = when (screen) {
-    Screen.Video -> 0
-    Screen.Image -> 1
-    Screen.Settings -> 2
 }
 
 private tailrec fun Context.findActivity(): Activity? = when (this) {
