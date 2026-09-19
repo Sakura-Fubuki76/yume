@@ -49,8 +49,10 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -397,18 +399,30 @@ class MediaPickerViewModel @Inject constructor(
     ): Pair<List<com.sakurafubuki.yume.core.model.WebDavMediaItem>, Int?> {
         val apiPath = server.toApiPath(path)
         return try {
-            val result = openListApi.listDirectory(server, apiPath, page = 1, perPage = perPage, refresh = refreshing)
-            result.fold(
-                onSuccess = { data ->
-                    val items = data.content.orEmpty().map { it.toWebDavMediaItem(server, apiPath) }
-                    items to data.total
-                },
-                onFailure = { throwable ->
-                    Logger.w(CLOUD_LOG_TAG, "OpenList API failed server=${server.id}, falling back to WebDAV: ${throwable.message}")
-                    throw throwable
-                },
-            )
-        } catch (_: Exception) {
+            val itemsByHref = linkedMapOf<String, com.sakurafubuki.yume.core.model.WebDavMediaItem>()
+            var page = 1
+            var total: Int
+            do {
+                val data = openListApi.listDirectory(
+                    server, apiPath, page = page, perPage = perPage,
+                    refresh = refreshing && page == 1,
+                ).getOrThrow()
+                total = data.total
+                val previousSize = itemsByHref.size
+                data.content.orEmpty().forEach { entry ->
+                    val item = entry.toWebDavMediaItem(server, apiPath)
+                    itemsByHref[item.href] = item
+                }
+                check(itemsByHref.size >= total || itemsByHref.size > previousSize) {
+                    "OpenList pagination made no progress"
+                }
+                page++
+            } while (itemsByHref.size < total)
+            itemsByHref.values.toList() to total
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            Logger.w(CLOUD_LOG_TAG, "OpenList listing failed server=${server.id}; falling back to WebDAV", error)
             val items = webDavRepository.listDirectory(server, path)
             items to null
         }
@@ -600,6 +614,7 @@ class MediaPickerViewModel @Inject constructor(
                         path = path,
                         preferences = preferences,
                         items = items,
+                        forceRetry = refreshing,
                     )
                 }
                 .onFailure { throwable ->
@@ -1575,6 +1590,7 @@ class MediaPickerViewModel @Inject constructor(
         path: String,
         preferences: ApplicationPreferences,
         items: List<com.sakurafubuki.yume.core.model.WebDavMediaItem>,
+        forceRetry: Boolean = false,
     ) {
         refreshCloudFolderWithMetadataAsync(
             cloudAuxParent = cloudAuxParent,
@@ -1583,6 +1599,7 @@ class MediaPickerViewModel @Inject constructor(
             path = path,
             preferences = preferences,
             items = items,
+            forceRetry = forceRetry,
         )
     }
 
@@ -1593,6 +1610,7 @@ class MediaPickerViewModel @Inject constructor(
         path: String,
         preferences: ApplicationPreferences,
         items: List<com.sakurafubuki.yume.core.model.WebDavMediaItem>,
+        forceRetry: Boolean = false,
     ) {
         viewModelScope.launch(cloudAuxParent + Dispatchers.IO) {
             val normalizedPath = normalizePath(path)
@@ -1601,8 +1619,8 @@ class MediaPickerViewModel @Inject constructor(
                 cloudVideoMetadataRepository.observeFolderMetadata(server.id),
             ) { metadataMap, folderMetadataMap ->
                 metadataMap to folderMetadataMap
-            }.collectLatest { (metadataMap, folderMetadataMap) ->
-                if (requestToken != cloudLoadRequestToken) return@collectLatest
+            }.conflate().collect { (metadataMap, folderMetadataMap) ->
+                if (requestToken != cloudLoadRequestToken) return@collect
 
                 val refreshedFolder = withContext(Dispatchers.Default) {
                     mapCloudFolder(
@@ -1621,8 +1639,8 @@ class MediaPickerViewModel @Inject constructor(
                     preferences = preferences,
                 )
 
-                if (requestToken != cloudLoadRequestToken) return@collectLatest
-                if (!shouldApplyCloudDisplayFolder(preferences, refreshedFolder, displayFolder)) return@collectLatest
+                if (requestToken != cloudLoadRequestToken) return@collect
+                if (!shouldApplyCloudDisplayFolder(preferences, refreshedFolder, displayFolder)) return@collect
 
                 val currentFolderMetadata = folderMetadataMap[normalizedPath]
                 if (currentFolderMetadata == null ||
@@ -1659,6 +1677,7 @@ class MediaPickerViewModel @Inject constructor(
                 path = path,
                 preferences = preferences,
                 items = items,
+                forceRetry = forceRetry,
             )
         }
     }
@@ -1668,6 +1687,7 @@ class MediaPickerViewModel @Inject constructor(
         path: String,
         preferences: ApplicationPreferences,
         items: List<com.sakurafubuki.yume.core.model.WebDavMediaItem>,
+        forceRetry: Boolean = false,
     ) {
         val videoItems = if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
             buildMap {
@@ -1682,7 +1702,7 @@ class MediaPickerViewModel @Inject constructor(
         } else {
             items.cloudDisplayVideoFiles()
         }
-        cloudVideoMetadataRepository.cacheMissingMetadata(server, videoItems)
+        cloudVideoMetadataRepository.cacheMissingMetadata(server, videoItems, forceRetry)
     }
 
     private fun shouldPreserveZeroFolderSummary(

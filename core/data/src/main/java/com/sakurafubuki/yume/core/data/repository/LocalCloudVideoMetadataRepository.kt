@@ -27,6 +27,7 @@ import io.github.sakurafubuki.yume.nativelib.mediainfo.MediaThumbnailRetriever
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -40,7 +41,9 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -61,8 +64,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
 
     private val metadataRetryLock = Any()
     private val metadataRetryAfterMs = mutableMapOf<String, Long>()
-    private val metadataInFlightLock = Any()
-    private val metadataInFlightKeys = mutableSetOf<String>()
+    private val metadataBatchMutex = Mutex()
 
     override suspend fun getMetadata(serverId: Int, hrefs: List<String>): Map<String, CloudVideoMetadata> {
         if (hrefs.isEmpty()) return emptyMap()
@@ -164,23 +166,15 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
         }
         .distinctUntilChanged()
 
-    override suspend fun cacheMissingMetadata(server: WebDavServer, items: List<WebDavMediaItem>): Boolean {
-        val videoItems = items.filter { it.isVideo && !it.isDirectory && it.size > 0L }
+    override suspend fun cacheMissingMetadata(server: WebDavServer, items: List<WebDavMediaItem>, forceRetry: Boolean): Boolean {
+        val videoItems = items.filter { it.isVideo && !it.isDirectory }.distinctBy { it.href }
         if (videoItems.isEmpty()) return false
-        val inFlightKey = metadataInFlightKey(server.id, videoItems)
-        val acquired = synchronized(metadataInFlightLock) {
-            metadataInFlightKeys.add(inFlightKey)
-        }
-        if (!acquired) {
-            return false
-        }
-
-        return try {
+        // A refresh waits for cancelled work to release its resources instead of being dropped.
+        return metadataBatchMutex.withLock {
             withContext(Dispatchers.IO) {
-                val existing = webDavVideoMetadataDao.getByServerAndHrefs(
-                    serverId = server.id,
-                    hrefs = videoItems.map { it.href },
-                ).associateBy { it.href }.toMutableMap()
+                val existing = videoItems.map { it.href }.chunked(SQL_BIND_CHUNK_SIZE).flatMap { hrefs ->
+                    webDavVideoMetadataDao.getByServerAndHrefs(server.id, hrefs)
+                }.associateBy { it.href }.let { ConcurrentHashMap(it) }
                 val existingLock = Any()
 
                 val now = System.currentTimeMillis()
@@ -200,8 +194,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                             async {
                                 apiMetadataSemaphore.withPermit {
                                     val extension = item.name.substringAfterLast('.', "")
-                                    val rawUrl = item.rawVideoUrl
-                                    Logger.d(TAG, "[API_THUMB] name=${item.name} rawUrl=${rawUrl?.take(100)}...")
+                                    val rawUrl = item.rawVideoUrl ?: webDavRepository.getStreamUrl(item, server)
                                     val localThumbPath = item.apiThumbnailUrl?.let { url ->
                                         downloadApiThumbnail(
                                             imageUrl = url,
@@ -209,8 +202,14 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                             mediaName = item.name,
                                         )
                                     }
-                                    val fallbackMetadata = if (localThumbPath == null) {
-                                        Logger.w(TAG, "API thumbnail unavailable; using video keyframe fallback name=${item.name}")
+                                    val cachedDurationMs = existing[item.href]?.durationMs ?: 0L
+                                    val durationMs = if (cachedDurationMs <= 0L) {
+                                        probeVideoDurationMs(rawUrl, okHttpClient, extension, mp4KeyframeExtractor) ?: 0L
+                                    } else {
+                                        cachedDurationMs
+                                    }
+                                    val fallbackMetadata = if (localThumbPath == null || durationMs <= 0L) {
+                                        Logger.w(TAG, "API metadata incomplete; using video keyframe fallback name=${item.name}")
                                         try {
                                             captureMetadata(server, item)
                                         } catch (e: Exception) {
@@ -220,12 +219,6 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                         }
                                     } else {
                                         CapturedMetadata(durationMs = 0L, thumbnailPath = null)
-                                    }
-                                    val cachedDurationMs = existing[item.href]?.durationMs ?: 0L
-                                    val durationMs = if (localThumbPath != null && cachedDurationMs <= 0L && rawUrl != null) {
-                                        probeVideoDurationMs(rawUrl, okHttpClient, extension, mp4KeyframeExtractor) ?: 0L
-                                    } else {
-                                        cachedDurationMs
                                     }
                                     Logger.d(TAG, "[API_THUMB] name=${item.name} durationMs=$durationMs")
                                     WebDavVideoMetadataEntity(
@@ -237,7 +230,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                         height = item.height ?: fallbackMetadata.height ?: 0,
                                         updatedAt = now,
                                     ).also { entity ->
-                                        webDavVideoMetadataDao.upsertAll(listOf(entity))
+                                        webDavVideoMetadataDao.mergeMetadata(listOf(entity))
                                         synchronized(existingLock) {
                                             existing[entity.href] = entity
                                         }
@@ -277,7 +270,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                     }
                 }
                 if (orphanRecoveries.isNotEmpty()) {
-                    webDavVideoMetadataDao.upsertAll(orphanRecoveries)
+                    webDavVideoMetadataDao.mergeMetadata(orphanRecoveries)
                     for (entity in orphanRecoveries) {
                         val prev = existing[entity.href]
                         val prevThumbnailPath = prev?.thumbnailPath
@@ -298,7 +291,6 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                 val probeUrl = item.rawVideoUrl
                                     ?: webDavRepository.getStreamUrl(item, server)
                                 val extension = item.name.substringAfterLast('.', "")
-                                Logger.d(TAG, "[LOCAL_THUMB] name=${item.name} probeUrl=${probeUrl.take(100)}...")
                                 val durationMs = probeVideoDurationMs(probeUrl, okHttpClient, extension, mp4KeyframeExtractor) ?: 0L
                                 Logger.d(TAG, "[LOCAL_THUMB] name=${item.name} durationMs=$durationMs")
                                 if (durationMs <= 0L) {
@@ -313,7 +305,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                     height = item.height ?: 0,
                                     updatedAt = System.currentTimeMillis(),
                                 )
-                                webDavVideoMetadataDao.upsertAll(listOf(entity))
+                                webDavVideoMetadataDao.mergeMetadata(listOf(entity))
                                 synchronized(existingLock) {
                                     existing[entity.href] = entity
                                 }
@@ -325,6 +317,8 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                     emptyList()
                 }
 
+                // Finish duration probes before deciding which files still need the expensive retriever.
+                durationProbeJobs.awaitAll()
                 val itemsToRefresh = localThumbItems.filter { item ->
                     val cached = existing[item.href]
                     val thumbnailPath = cached?.thumbnailPath
@@ -349,7 +343,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                             val existingEntry = existing[item.href]
                             val retryKey = "${server.id}|${item.href}"
                             val shouldRetryNow = synchronized(metadataRetryLock) {
-                                (metadataRetryAfterMs[retryKey] ?: 0L) <= now
+                                forceRetry || (metadataRetryAfterMs[retryKey] ?: 0L) <= now
                             }
                             val captured = if (shouldRetryNow) {
                                 try {
@@ -392,7 +386,7 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                                 updatedAt = now,
                             )
                             runCatching {
-                                webDavVideoMetadataDao.upsertAll(listOf(entity))
+                                webDavVideoMetadataDao.mergeMetadata(listOf(entity))
                                 synchronized(existingLock) {
                                     existing[entity.href] = entity
                                 }
@@ -423,10 +417,6 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
 
                 durationProbeJobs.awaitAll()
                 return@withContext apiThumbItems.isNotEmpty() || entities.isNotEmpty()
-            }
-        } finally {
-            synchronized(metadataInFlightLock) {
-                metadataInFlightKeys.remove(inFlightKey)
             }
         }
     }
@@ -579,6 +569,9 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
                         }
                     },
                 )
+            } catch (timeout: kotlinx.coroutines.TimeoutCancellationException) {
+                currentCoroutineContext().ensureActive()
+                Result.failure(timeout)
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (oom: OutOfMemoryError) {
@@ -971,11 +964,6 @@ class LocalCloudVideoMetadataRepository @Inject constructor(
     private fun sha256(input: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return digest.joinToString(separator = "") { byte -> "%02x".format(byte) }
-    }
-
-    private fun metadataInFlightKey(serverId: Int, items: List<WebDavMediaItem>): String {
-        val hrefDigest = sha256(items.map { it.href }.sorted().joinToString(separator = "\n")).take(16)
-        return "$serverId:${items.size}:$hrefDigest"
     }
 
     private data class CapturedMetadata(

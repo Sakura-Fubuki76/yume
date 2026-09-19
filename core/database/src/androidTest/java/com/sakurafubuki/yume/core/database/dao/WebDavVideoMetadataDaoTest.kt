@@ -5,8 +5,11 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.sakurafubuki.yume.core.database.MediaDatabase
 import com.sakurafubuki.yume.core.database.entities.WebDavVideoMetadataEntity
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 
@@ -29,6 +32,38 @@ class WebDavVideoMetadataDaoTest {
     @After
     fun tearDown() {
         db.close()
+    }
+
+    @Test
+    fun mergeMetadata_preserves_partial_results_in_either_completion_order() = runTest {
+        val duration = WebDavVideoMetadataEntity(1, "https://example.com/video.mp4", 12345, null, updatedAt = 1)
+        val thumbnail = duration.copy(durationMs = 0, thumbnailPath = "/tmp/cover.webp", width = 1920, height = 1080)
+        for (records in listOf(listOf(duration, thumbnail), listOf(thumbnail, duration))) {
+            webDavVideoMetadataDao.deleteByServerId(1)
+            records.forEach { webDavVideoMetadataDao.mergeMetadata(listOf(it)) }
+            val result = webDavVideoMetadataDao.getByServerAndHrefs(1, listOf(duration.href)).single()
+            assertEquals(12345L, result.durationMs)
+            assertEquals("/tmp/cover.webp", result.thumbnailPath)
+            assertEquals(1920, result.width)
+            assertEquals(1080, result.height)
+        }
+    }
+
+    @Test
+    fun mergeMetadata_concurrent_failed_probes_do_not_erase_success() = runTest {
+        val original = WebDavVideoMetadataEntity(1, "https://example.com/video.mp4", 0, null, updatedAt = 1)
+        (0 until 40).map { index ->
+            async {
+                webDavVideoMetadataDao.mergeMetadata(
+                    listOf(original.copy(durationMs = if (index == 10) 12345 else 0, thumbnailPath = if (index == 20) "/tmp/cover.webp" else null)),
+                )
+            }
+        }.awaitAll()
+        val result = webDavVideoMetadataDao.getByServerAndHrefs(1, listOf(original.href)).single()
+        assertEquals(12345L, result.durationMs)
+        assertEquals("/tmp/cover.webp", result.thumbnailPath)
+        webDavVideoMetadataDao.clearAllThumbnailPaths()
+        assertEquals(null, webDavVideoMetadataDao.getByServerAndHrefs(1, listOf(original.href)).single().thumbnailPath)
     }
 
     @Test

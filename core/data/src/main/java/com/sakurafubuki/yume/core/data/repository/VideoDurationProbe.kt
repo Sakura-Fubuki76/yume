@@ -2,7 +2,9 @@ package com.sakurafubuki.yume.core.data.repository
 
 import com.sakurafubuki.yume.core.common.Utils
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 
 suspend fun probeVideoDurationMs(
     url: String,
@@ -10,26 +12,33 @@ suspend fun probeVideoDurationMs(
     extension: String = "",
     mp4KeyframeExtractor: Mp4KeyframeExtractor? = null,
 ): Long? {
-    val ext = extension.lowercase()
-    val probeSize = when (ext) {
-        "flv" -> 4096
-        "mp4", "mov" -> 16384
-        else -> 16384
+    return try {
+        val ext = extension.lowercase()
+        val probeSize = when (ext) {
+            "flv" -> 4096
+            "mp4", "mov" -> 16384
+            else -> 16384
+        }
+
+        val data = fetchWithRetry(url, probeSize, okHttpClient)
+            ?: return null
+
+        val result = when {
+            isMkv(data) -> parseMkvDuration(data)
+            isMp4(data) -> parseMp4Duration(data) ?: (mp4KeyframeExtractor ?: Mp4KeyframeExtractor(okHttpClient)).extractDurationMs(url)
+            isFlv(data) -> parseFlvDuration(data)
+            isAvi(data) -> parseAviDuration(data)
+            else -> null
+        }
+        result?.takeIf { it > 0L }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        // A malformed/failed video must not cancel metadata collection for its siblings.
+        null
     }
 
-    val data = fetchWithRetry(url, probeSize, okHttpClient)
-        ?: return null
-
-    val result = when {
-        isMkv(data) -> parseMkvDuration(data)
-        isMp4(data) -> parseMp4Duration(data) ?: (mp4KeyframeExtractor ?: Mp4KeyframeExtractor(okHttpClient)).extractDurationMs(url)
-        isFlv(data) -> parseFlvDuration(data)
-        isAvi(data) -> parseAviDuration(data)
-        else -> null
-    }
-    return result
 }
-
 private suspend fun fetchWithRetry(
     url: String,
     probeSize: Int,
@@ -38,13 +47,13 @@ private suspend fun fetchWithRetry(
 ): ByteArray? {
     var lastException: Exception? = null
     for (attempt in 0..maxRetries) {
+        currentCoroutineContext().ensureActive()
         if (attempt > 0) {
             val delayMs = 500L * (1 shl (attempt - 1))
             delay(delayMs)
         }
         try {
-            val builder = okhttp3.Request.Builder()
-                .url(url)
+            val builder = videoMetadataRequest(url)
                 .header("Range", "bytes=0-${probeSize - 1}")
                 .header("Accept", "*/*")
             if (Utils.isBaiduNetdiskUrl(url)) {
@@ -59,7 +68,8 @@ private suspend fun fetchWithRetry(
                     }
                     return null
                 }
-                val bytes = body.bytes()
+                // Some WebDAV servers ignore Range and return the entire video.
+                val bytes = body.byteStream().use { it.readNBytes(probeSize) }
                 if (bytes.size < 32) {
                     return null
                 }

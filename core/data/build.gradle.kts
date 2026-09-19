@@ -30,6 +30,9 @@ kotlin {
 
 dependencies {
 
+    testImplementation(libs.junit4)
+    testImplementation(libs.kotlinx.coroutines.test)
+
     implementation(project(":core:database"))
     implementation(project(":core:cache"))
     implementation(project(":core:media"))

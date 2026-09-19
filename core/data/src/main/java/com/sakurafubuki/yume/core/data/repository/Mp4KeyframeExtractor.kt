@@ -24,7 +24,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.Response
 
 class Mp4KeyframeExtractor(
@@ -378,8 +377,7 @@ class Mp4KeyframeExtractor(
         ContentLengthCache.get(url)?.let { return it }
 
         return try {
-            val request = Request.Builder()
-                .url(url)
+            val request = videoMetadataRequest(url)
                 .head()
                 .header("Accept", "*/*")
                 .build()
@@ -407,8 +405,7 @@ class Mp4KeyframeExtractor(
     internal fun httpRange(url: String, start: Long, size: Int): ByteArray? {
         return try {
             val end = start + size - 1
-            val request = Request.Builder()
-                .url(url)
+            val request = videoMetadataRequest(url)
                 .header("Range", "bytes=$start-$end")
                 .header("Accept", "*/*")
                 .header("Accept-Encoding", "identity")
@@ -469,8 +466,7 @@ class Mp4KeyframeExtractor(
 
     private fun httpHeadWithRange(url: String, range: String): ByteArray? {
         return try {
-            val request = Request.Builder()
-                .url(url)
+            val request = videoMetadataRequest(url)
                 .header("Range", "bytes=$range")
                 .header("Accept", "*/*")
                 .build()
