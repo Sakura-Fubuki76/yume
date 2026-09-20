@@ -4,7 +4,6 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Transaction
 import com.sakurafubuki.yume.core.database.entities.WebDavVideoMetadataEntity
 
 @Dao
@@ -25,26 +24,43 @@ interface WebDavVideoMetadataDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<WebDavVideoMetadataEntity>)
 
-    // Probes and thumbnail jobs can finish in either order. Missing fields are not deletions.
-    @Transaction
+    // One statement atomically preserves fields produced by another probe.
+    @Query(
+        """
+        INSERT INTO webdav_video_metadata(server_id, href, duration_ms, thumbnail_path, width, height, updated_at)
+        VALUES (:serverId, :href, :durationMs, :thumbnailPath, :width, :height, :updatedAt)
+        ON CONFLICT(server_id, href) DO UPDATE SET
+            duration_ms = CASE WHEN excluded.duration_ms > 0 THEN excluded.duration_ms ELSE duration_ms END,
+            thumbnail_path = COALESCE(NULLIF(excluded.thumbnail_path, ''), thumbnail_path),
+            width = CASE WHEN excluded.width > 0 THEN excluded.width ELSE width END,
+            height = CASE WHEN excluded.height > 0 THEN excluded.height ELSE height END,
+            updated_at = MAX(updated_at, excluded.updated_at)
+        """,
+    )
+    suspend fun mergeMetadata(
+        serverId: Int,
+        href: String,
+        durationMs: Long,
+        thumbnailPath: String?,
+        width: Int,
+        height: Int,
+        updatedAt: Long,
+    )
+
     suspend fun mergeMetadata(entities: List<WebDavVideoMetadataEntity>) {
-        for (incoming in entities) {
-            val previous = getByServerAndHrefs(incoming.serverId, listOf(incoming.href)).firstOrNull()
-            upsertAll(
-                listOf(
-                    incoming.copy(
-                        durationMs = incoming.durationMs.takeIf { it > 0L } ?: previous?.durationMs ?: 0L,
-                        thumbnailPath = incoming.thumbnailPath?.takeIf { it.isNotBlank() } ?: previous?.thumbnailPath,
-                        width = incoming.width.takeIf { it > 0 } ?: previous?.width ?: 0,
-                        height = incoming.height.takeIf { it > 0 } ?: previous?.height ?: 0,
-                    ),
-                ),
-            )
+        for (entity in entities) {
+            mergeMetadata(entity.serverId, entity.href, entity.durationMs, entity.thumbnailPath, entity.width, entity.height, entity.updatedAt)
         }
     }
 
     @Query("UPDATE webdav_video_metadata SET thumbnail_path = NULL")
     suspend fun clearAllThumbnailPaths()
+
+    @Query("DELETE FROM webdav_video_metadata")
+    suspend fun clearAll(): Int
+
+    @Query("SELECT COUNT(*) FROM webdav_video_metadata")
+    suspend fun countAll(): Int
 
     @Query("DELETE FROM webdav_video_metadata WHERE server_id = :serverId")
     suspend fun deleteByServerId(serverId: Int)

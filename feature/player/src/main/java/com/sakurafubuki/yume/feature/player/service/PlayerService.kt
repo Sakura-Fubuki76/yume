@@ -153,11 +153,11 @@ private const val MEM_DUMP_THRESHOLD_MB = 380
 
 // Adaptive in-memory buffer cap: aim for ~60 s of content at the bandwidth the
 // meter measures, clamped so slow streams still get a useful window and fast ones
-// cannot exhaust the (largeHeap-raised) process heap. While the meter is still
+// cannot exhaust the available process heap. While the meter is still
 // cold (< 2 Mbps initial estimate) fall back to 64 MB.
 private const val ADAPTIVE_BUFFER_TARGET_SECONDS = 60
 private const val ADAPTIVE_BUFFER_MIN_BYTES = 32 * 1024 * 1024
-private const val ADAPTIVE_BUFFER_MAX_BYTES = 256 * 1024 * 1024
+private const val ADAPTIVE_BUFFER_MAX_BYTES = 128 * 1024 * 1024
 private const val ADAPTIVE_BUFFER_FALLBACK_BYTES = 64 * 1024 * 1024
 private const val ADAPTIVE_BUFFER_MIN_KNOWN_BITRATE = 2_000_000L
 

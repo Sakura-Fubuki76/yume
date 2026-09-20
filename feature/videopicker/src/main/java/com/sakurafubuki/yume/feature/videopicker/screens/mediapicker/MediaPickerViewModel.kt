@@ -17,6 +17,7 @@ import com.sakurafubuki.yume.core.data.openlist.toApiPath
 import com.sakurafubuki.yume.core.data.openlist.toWebDavMediaItem
 import com.sakurafubuki.yume.core.data.repository.CloudVideoMetadataRepository
 import com.sakurafubuki.yume.core.data.repository.MediaRepository
+import com.sakurafubuki.yume.core.data.repository.MetadataRequestPriority
 import com.sakurafubuki.yume.core.data.repository.PreferencesRepository
 import com.sakurafubuki.yume.core.data.repository.WebDavServerRepository
 import com.sakurafubuki.yume.core.data.webdav.WebDavRepository
@@ -1616,8 +1617,21 @@ class MediaPickerViewModel @Inject constructor(
     ) {
         viewModelScope.launch(cloudAuxParent + Dispatchers.IO) {
             val normalizedPath = normalizePath(path)
+            val observedVideoHrefs = buildSet {
+                if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
+                    collectVideoHrefsFromCachedTree(
+                        server = server,
+                        parentPath = path,
+                        items = items,
+                        visitedPaths = mutableSetOf(),
+                        collector = this,
+                    )
+                } else {
+                    items.cloudDisplayVideoFiles().forEach { add(it.href) }
+                }
+            }.toList()
             combine(
-                cloudVideoMetadataRepository.observeMetadata(server.id),
+                cloudVideoMetadataRepository.observeMetadata(server.id, observedVideoHrefs),
                 cloudVideoMetadataRepository.observeFolderMetadata(server.id),
             ) { metadataMap, folderMetadataMap ->
                 metadataMap to folderMetadataMap
@@ -1691,8 +1705,16 @@ class MediaPickerViewModel @Inject constructor(
         items: List<com.sakurafubuki.yume.core.model.WebDavMediaItem>,
         forceRetry: Boolean = false,
     ) {
-        val videoItems = if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
-            buildMap {
+        val directVideoItems = items.cloudDisplayVideoFiles()
+        cloudVideoMetadataRepository.cacheMissingMetadata(
+            server,
+            directVideoItems,
+            forceRetry,
+            priority = MetadataRequestPriority.FOREGROUND,
+        )
+        if (preferences.mediaViewMode == MediaViewMode.FOLDER_TREE) {
+            val directHrefs = directVideoItems.asSequence().map { it.href }.toHashSet()
+            val backgroundItems = buildMap {
                 collectVideoItemsFromCachedTree(
                     server = server,
                     parentPath = path,
@@ -1700,11 +1722,14 @@ class MediaPickerViewModel @Inject constructor(
                     visitedPaths = mutableSetOf(),
                     collector = this,
                 )
-            }.values.toList()
-        } else {
-            items.cloudDisplayVideoFiles()
+            }.values.filterNot { it.href in directHrefs }
+            cloudVideoMetadataRepository.cacheMissingMetadata(
+                server,
+                backgroundItems,
+                forceRetry,
+                priority = MetadataRequestPriority.BACKGROUND,
+            )
         }
-        cloudVideoMetadataRepository.cacheMissingMetadata(server, videoItems, forceRetry)
     }
 
     private fun shouldPreserveZeroFolderSummary(

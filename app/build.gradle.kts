@@ -127,6 +127,9 @@ dependencies {
     implementation(project(":feature:settings"))
     implementation(project(":feature:imagebrowser"))
 
+    // Debug-only metadata test receiver (app/src/debug) touches DAOs directly.
+    debugImplementation(project(":core:database"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     // Compose

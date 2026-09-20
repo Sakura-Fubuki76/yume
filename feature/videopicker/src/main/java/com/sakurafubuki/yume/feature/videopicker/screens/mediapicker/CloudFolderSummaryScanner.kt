@@ -8,6 +8,7 @@ import com.sakurafubuki.yume.core.data.openlist.OpenListApi
 import com.sakurafubuki.yume.core.data.openlist.toApiPath
 import com.sakurafubuki.yume.core.data.openlist.toWebDavMediaItem
 import com.sakurafubuki.yume.core.data.repository.CloudVideoMetadataRepository
+import com.sakurafubuki.yume.core.data.repository.MetadataRequestPriority
 import com.sakurafubuki.yume.core.data.webdav.WebDavRepository
 import com.sakurafubuki.yume.core.model.WebDavMediaItem
 import com.sakurafubuki.yume.core.model.WebDavServer
@@ -121,7 +122,11 @@ class CloudFolderSummaryScanner @Inject constructor(
         val items = listCloudDirectory(server, normalizedPath, perPage = SUMMARY_LIST_PER_PAGE)
         webDavVideoDirectoryCache.put(server.id, normalizedPath, items)
         cloudDirectoryItemCache.put(server.id, normalizedPath, items)
-        cloudVideoMetadataRepository.cacheMissingMetadata(server, items.cloudDisplayVideoFiles())
+        cloudVideoMetadataRepository.cacheMissingMetadata(
+            server,
+            items.cloudDisplayVideoFiles(),
+            priority = MetadataRequestPriority.BACKGROUND,
+        )
 
         if (depth < SUMMARY_SCAN_MAX_DEPTH && items.cloudDisplayVideoFiles().isEmpty()) {
             val childPaths = items

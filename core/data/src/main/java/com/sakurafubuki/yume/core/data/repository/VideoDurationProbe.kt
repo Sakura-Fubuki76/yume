@@ -28,6 +28,11 @@ suspend fun probeVideoDurationMs(
             isMp4(data) -> parseMp4Duration(data) ?: (mp4KeyframeExtractor ?: Mp4KeyframeExtractor(okHttpClient)).extractDurationMs(url)
             isFlv(data) -> parseFlvDuration(data)
             isAvi(data) -> parseAviDuration(data)
+            isTs(data) -> {
+                // MPEG-TS carries no container duration; estimate from PTS at both ends.
+                val tail = fetchTailWithRetry(url, TS_PROBE_TAIL_BYTES, okHttpClient)
+                tail?.let { parseTsDuration(data, it) }
+            }
             else -> null
         }
         result?.takeIf { it > 0L }
@@ -37,6 +42,96 @@ suspend fun probeVideoDurationMs(
         // A malformed/failed video must not cancel metadata collection for its siblings.
         null
     }
+}
+
+private const val TS_PACKET_SIZE = 188
+private const val TS_PROBE_TAIL_BYTES = 256 * 1024
+
+private fun isTs(data: ByteArray): Boolean = data.size >= TS_PACKET_SIZE * 2 &&
+    data[0] == 0x47.toByte() &&
+    data[TS_PACKET_SIZE] == 0x47.toByte()
+
+private suspend fun fetchTailWithRetry(
+    url: String,
+    tailBytes: Int,
+    okHttpClient: okhttp3.OkHttpClient,
+    maxRetries: Int = 2,
+): ByteArray? {
+    for (attempt in 0..maxRetries) {
+        currentCoroutineContext().ensureActive()
+        if (attempt > 0) {
+            delay(500L * (1 shl (attempt - 1)))
+        }
+        try {
+            val builder = videoMetadataRequest(url)
+                .header("Range", "bytes=-$tailBytes")
+                .header("Accept", "*/*")
+            if (Utils.isBaiduNetdiskUrl(url)) {
+                builder.header("User-Agent", "pan.baidu.com")
+            }
+            val request = builder.build()
+            okHttpClient.newCall(request).execute().use { response ->
+                val body = response.body
+                // Only trust a real suffix range; a 200 body would be the head, not the tail.
+                if (response.code != 206 || body == null) return null
+                val bytes = body.byteStream().use { it.readNBytes(tailBytes) }
+                return bytes.takeIf { it.isNotEmpty() }
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+        }
+    }
+    return null
+}
+
+private fun parseTsDuration(headData: ByteArray, tailData: ByteArray): Long? {
+    val firstPts = extractTsPts(headData, wantMax = false) ?: return null
+    val lastPts = extractTsPts(tailData, wantMax = true) ?: return null
+    var delta = lastPts - firstPts
+    if (delta < 0) delta += 1L shl 33 // 33-bit PTS wrap (clips longer than ~26.5h)
+    // Overlapping head/tail on tiny files yields a bogus sub-second delta.
+    val durationMs = delta * 1000L / 90_000L
+    return durationMs.takeIf { it > 1_000L }
+}
+
+/** Min (head) or max (tail) PTS found in video PES packets within [data]. */
+private fun extractTsPts(data: ByteArray, wantMax: Boolean): Long? {
+    var best: Long? = null
+    var i = 0
+    val limit = data.size - 9
+    while (i < limit) {
+        if (data[i] == 0x00.toByte() && data[i + 1] == 0x00.toByte() && data[i + 2] == 0x01.toByte()) {
+            val streamId = data[i + 3].toInt() and 0xFF
+            // PES header: [00 00 01 sid][len 2B]['10' flags][PTS flags][header len][fields...]
+            val isVideoStream = streamId in 0xE0..0xEF
+            // data[i+4..5] is PES_packet_length; the '10' flags byte sits at i+6.
+            val hasPesHeader = (data[i + 6].toInt() and 0xC0) == 0x80
+            if (isVideoStream && hasPesHeader) {
+                val ptsFlags = data[i + 7].toInt() and 0xC0
+                if (ptsFlags == 0x80 || ptsFlags == 0xC0) {
+                    val pts = decodeTsPts(data, i + 9)
+                    if (pts != null && (best == null || (if (wantMax) pts > best else pts < best))) {
+                        best = pts
+                    }
+                }
+            }
+            i += 3
+        }
+        i++
+    }
+    return best
+}
+
+private fun decodeTsPts(data: ByteArray, pos: Int): Long? {
+    if (pos + 5 > data.size) return null
+    val first = data[pos].toInt() and 0xFF
+    // '0010' (PTS) or '0011' (PTS+DTS) prefix with marker bit.
+    if ((first and 0xC0) != 0 || (first and 0x20) == 0) return null
+    return ((first shr 1 and 0x07).toLong() shl 30) or
+        ((data[pos + 1].toLong() and 0xFF) shl 22) or
+        (((data[pos + 2].toLong() and 0xFF) shr 1) shl 15) or
+        ((data[pos + 3].toLong() and 0xFF) shl 7) or
+        ((data[pos + 4].toLong() and 0xFF) shr 1)
 }
 private suspend fun fetchWithRetry(
     url: String,

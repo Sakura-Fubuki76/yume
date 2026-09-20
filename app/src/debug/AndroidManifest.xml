@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Debug-only test hook: clear/dump WebDAV metadata tables via adb. Never present in release builds. -->
+        <receiver
+            android:name="com.sakurafubuki.yume.debug.MetadataTestReceiver"
+            android:exported="true" />
+    </application>
+
+</manifest>

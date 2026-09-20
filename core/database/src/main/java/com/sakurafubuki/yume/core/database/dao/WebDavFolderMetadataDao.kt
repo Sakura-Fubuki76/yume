@@ -27,6 +27,12 @@ interface WebDavFolderMetadataDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(entities: List<WebDavFolderMetadataEntity>)
 
+    @Query("DELETE FROM webdav_folder_metadata")
+    suspend fun clearAll(): Int
+
+    @Query("SELECT COUNT(*) FROM webdav_folder_metadata")
+    suspend fun countAll(): Int
+
     @Query("DELETE FROM webdav_folder_metadata WHERE server_id = :serverId")
     suspend fun deleteByServerId(serverId: Int)
 }
