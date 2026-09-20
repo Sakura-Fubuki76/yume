@@ -8,4 +8,4 @@ import androidx.compose.ui.unit.dp
  * padding bar: it extends the scroll range inside the page, so the space revealed when
  * scrolled to the end shows the page's own background.
  */
-val FloatingNavigationClearance = 88.dp
+val FloatingNavigationClearance = 104.dp

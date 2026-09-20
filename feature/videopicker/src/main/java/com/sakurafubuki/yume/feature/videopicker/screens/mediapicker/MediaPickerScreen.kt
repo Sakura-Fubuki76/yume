@@ -726,7 +726,9 @@ private fun CloudVideoPane(
                         onFolderClick = onFolderClick,
                         onVideoClick = { clickedUri -> onVideoClick(clickedUri, cloudPlaylist) },
                         onVideoLoaded = {},
-                        contentPadding = PaddingValues(bottom = 8.dp),
+                        // Extra scroll range so the last row clears the floating bar,
+                        // same as the local-mode pane above.
+                        contentPadding = PaddingValues(bottom = FloatingNavigationClearance),
                     )
                 }
             }
