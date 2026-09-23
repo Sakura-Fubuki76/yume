@@ -1182,7 +1182,6 @@ class PlayerService : MediaSessionService() {
                 .setCache(cache)
                 .setUpstreamDataSourceFactory(upstreamFactory)
                 .setCacheKeyFactory(cacheKeyFactory)
-                .setCacheWriteDataSinkFactory(null)
                 .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
         }
 
@@ -2136,7 +2135,7 @@ private class ScrubbingAwareLoadControl(
     normalMinBufferMs: Int,
     normalMaxBufferMs: Int,
     normalBufferForPlaybackMs: Int,
-    normalBufferForPlaybackAfterRebufferMs: Int,
+    private val normalBufferForPlaybackAfterRebufferMs: Int,
     backBufferMs: Int,
 ) : LoadControl {
 
@@ -2194,6 +2193,14 @@ private class ScrubbingAwareLoadControl(
      * not waste RAM on an unbounded time-based window.
      */
     override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean {
+        // The back buffer also uses this allocator. If it fills the adaptive cap,
+        // loading must still resume before the forward buffer runs dry.
+        val minimumForwardBufferUs = (if (isScrubbing) {
+            SCRUB_BUFFER_FOR_PLAYBACK_AFTER_REBUFFER_MS
+        } else {
+            normalBufferForPlaybackAfterRebufferMs
+        }).toLong() * 1000L
+        if (parameters.bufferedDurationUs < minimumForwardBufferUs) return true
         if (allocator.totalBytesAllocated >= computeAdaptiveTargetBytes()) return false
         return delegate.shouldContinueLoading(parameters)
     }
